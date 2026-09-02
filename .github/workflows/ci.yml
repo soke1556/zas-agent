@@ -58,6 +58,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # npm sets the executable bit when it installs a bin; a raw build has none.
+          chmod +x dist/cli.js
           ln -s "$PWD/dist/cli.js" /tmp/zas-agent
           expected="$(node -p "require('./package.json').version")"
           test "$(/tmp/zas-agent --version)" = "$expected"
