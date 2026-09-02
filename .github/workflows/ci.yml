@@ -1,0 +1,86 @@
+# Every action is pinned by commit SHA. A tag is a moving target: whoever can
+# move `v7` can run their own code in this workflow, and OpenSSF Scorecard's
+# Pinned-Dependencies check exists to say so. The comment after each SHA is the
+# tag it stood for when it was pinned; Dependabot updates both together.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: node ${{ matrix.node }} on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        node: [20, 22]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run typecheck
+
+      - run: npm test
+
+      - run: npm run build
+
+      # The bundle carries its version from package.json through an esbuild
+      # define. If the two ever disagree, `--version` lies about what is
+      # installed, and every bug report after that names the wrong release.
+      - name: the bundle reports the package version
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected="$(node -p "require('./package.json').version")"
+          actual="$(node dist/cli.js --version)"
+          test "$actual" = "$expected" || { echo "dist says $actual, package.json says $expected"; exit 1; }
+
+      # npm installs the bin as a symlink. Node then puts the *link* in argv[1]
+      # while import.meta.url names the real file, and comparing the two as
+      # strings once made the installed command a silent no-op.
+      - name: the bundle still runs through a symlink
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          ln -s "$PWD/dist/cli.js" /tmp/zas-agent
+          expected="$(node -p "require('./package.json').version")"
+          test "$(/tmp/zas-agent --version)" = "$expected"
+
+      # What `npm publish` would actually ship. A `files` entry that stopped
+      # matching would publish a package with no executable in it, and npm
+      # would not complain.
+      - name: the tarball carries the bundle, the readme, the licence and the changelog
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm pack --dry-run --json > pack.json
+          node -e "
+            const files = require('./pack.json')[0].files.map((f) => f.path);
+            const missing = ['dist/cli.js', 'README.md', 'LICENSE', 'CHANGELOG.md'].filter((f) => !files.includes(f));
+            if (missing.length > 0) {
+              console.error('missing from the tarball: ' + missing.join(', '));
+              console.error('it holds: ' + files.join(', '));
+              process.exit(1);
+            }
+            console.log('tarball: ' + files.length + ' files');
+          "
+          rm pack.json
+
+      - name: no known high-severity advisory in what ships
+        run: npm audit --omit=dev --audit-level=high

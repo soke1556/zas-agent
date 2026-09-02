@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/soke1556/zas-agent/security/advisories/new
+    about: Never in a public issue. This opens a private report, visible only to the maintainer. See SECURITY.md.
+  - name: Question about Zas the product
+    url: https://zas.red
+    about: This repository is only the agent package. Anything about the app, the plans or an account belongs on the site.

@@ -1,0 +1,61 @@
+{
+  "name": "zas-agent",
+  "version": "0.1.0",
+  "description": "MCP server that lets a coding agent send files and notes into your Zas channels.",
+  "type": "module",
+  "license": "MIT",
+  "author": "Sebastian Fernandez Quezada",
+  "homepage": "https://github.com/soke1556/zas-agent#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/soke1556/zas-agent.git"
+  },
+  "bugs": "https://github.com/soke1556/zas-agent/issues",
+  "keywords": [
+    "mcp",
+    "mcp-server",
+    "model-context-protocol",
+    "claude-code",
+    "codex",
+    "zas",
+    "end-to-end-encryption"
+  ],
+  "mcpName": "io.github.soke1556/zas-agent",
+  "bin": {
+    "zas-agent": "dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "scripts": {
+    "build": "node build.mjs",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json",
+    "prepack": "node build.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@noble/ciphers": "^1.3.0",
+    "@noble/curves": "^1.9.0",
+    "@noble/hashes": "^1.8.0",
+    "hash-wasm": "^4.12.0",
+    "jimp": "^1.6.0",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "esbuild": "^0.25.0",
+    "typescript": "^5.8.0",
+    "vitest": "^3.2.0"
+  }
+}

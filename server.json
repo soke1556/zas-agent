@@ -1,0 +1,33 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.soke1556/zas-agent",
+  "title": "Zas",
+  "description": "Send files and notes from a coding agent into your Zas channels, end-to-end encrypted.",
+  "version": "0.1.0",
+  "websiteUrl": "https://zas.red",
+  "repository": {
+    "url": "https://github.com/soke1556/zas-agent",
+    "source": "github"
+  },
+  "packages": [
+    {
+      "registryType": "npm",
+      "registryBaseUrl": "https://registry.npmjs.org",
+      "identifier": "zas-agent",
+      "version": "0.1.0",
+      "runtimeHint": "npx",
+      "transport": {
+        "type": "stdio"
+      },
+      "packageArguments": [
+        {
+          "type": "named",
+          "name": "--profile",
+          "description": "Which local identity directory to use, under ~/.zas/agent/. One profile per harness, so a Claude Code agent and a Codex agent on one machine stay separate. Pair it first with: npx -y zas-agent pair --profile <name>",
+          "isRequired": false,
+          "default": "claude-code"
+        }
+      ]
+    }
+  ]
+}

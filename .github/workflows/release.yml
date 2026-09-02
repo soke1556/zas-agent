@@ -1,0 +1,114 @@
+# A tag is the whole release procedure. See RELEASING.md.
+#
+# The publish authenticates with a short-lived OIDC token through npm trusted
+# publishing, configured once on npmjs.com against this repository, this
+# workflow file and the `release` environment: no npm token to leak or rotate.
+# The one exception is the first release. npm attaches a trusted publisher to a
+# package that already exists, so 0.1.0 is published with a short-lived token
+# held in the `release` environment as NPM_BOOTSTRAP_TOKEN, deleted right after.
+# Provenance is attached either way.
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      # The OIDC token npm trades for a publish credential, and signs the
+      # provenance with.
+      id-token: write
+      # Creating the GitHub release.
+      contents: write
+    env:
+      # 'true' only while the first-release bootstrap secret exists.
+      BOOTSTRAP: ${{ secrets.NPM_BOOTSTRAP_TOKEN != '' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+          registry-url: https://registry.npmjs.org
+
+      # Trusted publishing needs npm 11.5.1 or newer; Node 22 still ships 10.
+      - run: npm install -g npm@^11
+
+      - run: npm ci
+
+      # A tag that does not match package.json would publish one version under
+      # another one's name, and npm cannot take a version back.
+      - name: the tag and package.json agree
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME#v}"
+          pkg="$(node -p "require('./package.json').version")"
+          test "$tag" = "$pkg" || { echo "tag $GITHUB_REF_NAME does not match package.json $pkg"; exit 1; }
+          echo "VERSION=$pkg" >> "$GITHUB_ENV"
+
+      - run: npm test
+
+      - run: npm run build
+
+      - name: publish (trusted publishing)
+        if: env.BOOTSTRAP != 'true'
+        run: npm publish --provenance --access public
+
+      - name: publish (first release, with the bootstrap token)
+        if: env.BOOTSTRAP == 'true'
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_BOOTSTRAP_TOKEN }}
+        run: npm publish --provenance --access public
+
+      - name: pack the tarball for the release
+        run: npm pack
+
+      # The changelog section for this version, verbatim, as the release notes.
+      # Notes written twice are notes that disagree.
+      - name: release notes from the changelog
+        run: |
+          set -euo pipefail
+          cat > /tmp/release-notes.mjs <<'NODE'
+          import { readFileSync, writeFileSync } from 'node:fs';
+          const version = process.env.VERSION;
+          const lines = readFileSync('CHANGELOG.md', 'utf8').split('\n');
+          const start = lines.findIndex((line) => line.startsWith(`## [${version}]`));
+          if (start < 0) {
+            console.error(`CHANGELOG.md has no section for ${version}`);
+            process.exit(1);
+          }
+          const rest = lines.slice(start + 1);
+          const end = rest.findIndex((line) => line.startsWith('## '));
+          // The last section runs to the end of the file, where Keep a
+          // Changelog puts its link definitions. They are markup, not notes.
+          const body = (end < 0 ? rest : rest.slice(0, end))
+            .filter((line) => !/^\[[^\]]+\]:\s/.test(line))
+            .join('\n')
+            .trim();
+          if (body === '') {
+            console.error(`the CHANGELOG.md section for ${version} is empty`);
+            process.exit(1);
+          }
+          writeFileSync('RELEASE_NOTES.md', `${body}\n`);
+          NODE
+          node /tmp/release-notes.mjs
+          cat RELEASE_NOTES.md
+
+      - name: github release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh release create "$GITHUB_REF_NAME" \
+            --title "$GITHUB_REF_NAME" \
+            --notes-file RELEASE_NOTES.md \
+            "zas-agent-${VERSION}.tgz"

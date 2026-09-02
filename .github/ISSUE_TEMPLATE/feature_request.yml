@@ -1,0 +1,44 @@
+name: Feature request
+description: Something zas-agent should be able to do and cannot.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The Zas server is not open source, so a change that needs a server
+        change cannot arrive as a pull request. It can still be a good issue:
+        say what you need and why, and the maintainer will say whether the
+        server side is possible.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you trying to do, and where does it stop?
+      placeholder: "When I ... I have to ... because zas-agent cannot ..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you would like it to do
+      description: Be concrete. A tool name, a flag, a message — whatever the shape is.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What you tried instead
+      description: Other tools, a workaround, a different order of operations.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Scope
+      options:
+        - label: This is about the agent package, not about the Zas app or the website.
+          required: true

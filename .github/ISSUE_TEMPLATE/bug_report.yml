@@ -1,0 +1,100 @@
+name: Bug report
+description: Something in zas-agent does not work the way it says it does.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report.
+
+        **Not for security vulnerabilities.** If this is one, close this tab and
+        use [Report a vulnerability](https://github.com/soke1556/zas-agent/security/advisories/new)
+        in the Security tab instead. See [SECURITY.md](https://github.com/soke1556/zas-agent/blob/main/SECURITY.md).
+
+  - type: input
+    id: version
+    attributes:
+      label: zas-agent version
+      description: The output of `npx -y zas-agent --version`.
+      placeholder: "0.1.0"
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: "macOS 15.3 / Ubuntu 24.04 / Windows 11"
+    validations:
+      required: true
+
+  - type: input
+    id: node
+    attributes:
+      label: Node version
+      description: The output of `node --version`.
+      placeholder: "v22.12.0"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: harness
+    attributes:
+      label: Harness
+      description: What started the MCP server.
+      options:
+        - Claude Code
+        - Codex
+        - Another MCP client
+        - The CLI directly (zas-agent pair)
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Numbered, from a clean start. Include the tool call or the command.
+      placeholder: |
+        1. npx -y zas-agent pair --profile codex
+        2. Approve on the page
+        3. Call zas_send_file with ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: What happened instead
+      description: The exact message, if there was one.
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Log excerpt
+      description: |
+        The relevant lines only. **Redact before pasting:** pairing codes,
+        key fingerprints, tokens, channel ids, file paths you would rather not
+        share, and anything from the contents of a file you sent.
+      render: text
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before you post
+      options:
+        - label: I redacted codes, fingerprints and tokens from the log above.
+          required: true
+        - label: This is not a security vulnerability.
+          required: true
