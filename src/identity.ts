@@ -107,7 +107,7 @@ function agentHome(): string {
 export const PROFILE_RE = /^(?!\.)[A-Za-z0-9._-]{1,64}$/;
 
 export function profileDir(profile: string): string {
-  if (!PROFILE_RE.test(profile)) throw new ZasError('internal', 0, `Perfil inválido: ${profile}`);
+  if (!PROFILE_RE.test(profile)) throw new ZasError('internal', 0, `Invalid profile: ${profile}`);
   return join(agentHome(), profile);
 }
 

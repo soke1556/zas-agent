@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-09-02
+
+### Changed
+
+- Every line the agent prints and every tool result is in English. The pairing
+  prompt, the status report and the error sentences were in Spanish.
+- The README opens with what Zas is. The README, the package keywords and the
+  registry entry no longer call the design end-to-end encryption: the
+  product's own privacy page does not, because a separate service derives
+  account keys.
+
 ## [0.1.0] - 2026-09-02
 
 ### Added
@@ -25,5 +36,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   two separate identities that cannot read each other's keys.
 - Install snippets for Claude Code and Codex, printed by `zas-agent pair`.
 
-[Unreleased]: https://github.com/soke1556/zas-agent/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/soke1556/zas-agent/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/soke1556/zas-agent/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/soke1556/zas-agent/releases/tag/v0.1.0

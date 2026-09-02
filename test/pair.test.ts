@@ -118,13 +118,13 @@ describe('runPair', () => {
     expect(combined).toContain(pairUrl('https://zas.red', 'p1'));
     expect(combined).toContain('ABCD-EFGH');
     expect(combined).toContain('ab12 cd34 ef56 7890');
-    expect(combined).toContain('vence en 10 minutos');
-    expect(combined).toContain('Listo: el agente «Claude Code» quedó emparejado con tu cuenta.');
+    expect(combined).toContain('expires in 10 minutes');
+    expect(combined).toContain('Done: the agent “Claude Code” is paired with your account.');
     expect(combined).toContain(`claude mcp add zas -- npx -y zas-agent --profile ${PROFILE}`);
     expect(combined).toContain(`codex mcp add zas -- npx -y zas-agent --profile ${PROFILE}`);
     expect(combined).not.toContain('[mcp_servers.zas]');
     expect(combined).not.toContain('--profile claude-code');
-    expect(combined).toContain('O a Codex:');
+    expect(combined).toContain('Or to Codex:');
 
     expect(f.pollHeaders).toEqual(['f'.repeat(64), 'f'.repeat(64), 'f'.repeat(64)]);
     expect(sleepCalls).toEqual([2000, 2000]);
@@ -174,10 +174,10 @@ describe('runPair', () => {
       now: () => NOW,
     });
 
-    const warnLines = logLines.filter((l) => l.includes('ya está emparejado'));
+    const warnLines = logLines.filter((l) => l.includes('is already paired'));
     expect(warnLines).toHaveLength(1);
-    expect(warnLines[0]).toContain('«Old Agent»');
-    expect(warnLines[0]).toContain('Ajustes → Agentes');
+    expect(warnLines[0]).toContain('“Old Agent”');
+    expect(warnLines[0]).toContain('Settings → Agents');
     expect(identity.agent_uid).toBe(AGENT_UID);
     expect(loadIdentity('claude-code')).toEqual(identity);
   });

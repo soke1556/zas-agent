@@ -54,10 +54,10 @@ function fakeClient(api: (method: string, path: string) => Promise<unknown>): Za
 }
 
 const PAIR_BLOCK = [
-  'Abrí esta página con tu cuenta de Zas:',
+  'Open this page signed in to your Zas account:',
   '  https://zas.red/agents/pair?p=p1',
-  'Código:  ABCD-EFGH',
-  'Esperando la aprobación… (vence en 10 minutos)',
+  'Code:        ABCD-EFGH',
+  'Waiting for approval… (expires in 10 minutes)',
 ].join('\n');
 
 /** A `runPair` the test settles by hand. It logs the pairing block the moment
@@ -148,10 +148,10 @@ describe('buildServer', () => {
     }));
     const status = await call(client, 'zas_status');
     expect(status.isError).toBe(false);
-    expect(status.text).toContain('«Claude Code»');
+    expect(status.text).toContain('“Claude Code”');
     expect(status.text).toContain('owner-1');
-    expect(status.text).toContain('Trabajo · envía · lee');
-    expect(status.text).toContain('Borradores · envía');
+    expect(status.text).toContain('Trabajo · send · read');
+    expect(status.text).toContain('Borradores · send');
     expect(status.text).toContain(agentVersion());
     await client.close();
   });
@@ -165,11 +165,11 @@ describe('buildServer', () => {
       client: fakeClient(async () => ({ grants: [stranger] })),
     }));
     const status = await call(client, 'zas_status');
-    expect(status.text).toContain('c9 · envía · lee');
+    expect(status.text).toContain('c9 · send · read');
     await client.close();
   });
 
-  it('turns a refusal into the closed code and both sentences', async () => {
+  it('turns a refusal into the closed code and its sentence', async () => {
     const client = await connect(buildServer('p', {
       identity,
       client: fakeClient(async () => { throw new ZasError('agent_revoked', 403); }),
@@ -177,7 +177,6 @@ describe('buildServer', () => {
     const refused = await call(client, 'zas_send_note', { text: 'hola', channel: 'Trabajo' });
     expect(refused.isError).toBe(true);
     expect(refused.text).toContain('agent_revoked');
-    expect(refused.text).toContain('El dueño revocó este agente');
     expect(refused.text).toContain('The owner revoked this agent');
     await client.close();
   });
@@ -196,7 +195,7 @@ describe('buildServer', () => {
 
   it('never claims a Directo channel can be sent to', async () => {
     // `send.ts` refuses every send to a channel in Directo mode, so a status
-    // line that says «envía» is the one place the package disagrees with
+    // line that says “send” is the one place the package disagrees with
     // itself. Reading stays true: Directo changes nothing about it.
     const grants = [
       { ...grant('c3', workKey, 'Directo', true), direct_mode: true },
@@ -207,10 +206,10 @@ describe('buildServer', () => {
       client: fakeClient(async () => ({ grants })),
     }));
     const status = await call(client, 'zas_status');
-    expect(status.text).toContain('Directo · lee');
-    expect(status.text).not.toContain('Directo · envía');
-    expect(status.text).toContain('Silencio · sin permisos');
-    expect(status.text).not.toContain('Silencio · envía');
+    expect(status.text).toContain('Directo · read');
+    expect(status.text).not.toContain('Directo · send');
+    expect(status.text).toContain('Silencio · no access');
+    expect(status.text).not.toContain('Silencio · send');
     await client.close();
   });
 
@@ -225,7 +224,7 @@ describe('buildServer', () => {
     const refused = await call(client, 'zas_send_note', { text: 'hola', channel: 'Trabajo' });
     expect(refused.isError).toBe(true);
     expect(refused.text).toBe(
-      `rate_limited: ${humanSentence(error, 'es')} / ${humanSentence(error, 'en')}`,
+      `rate_limited: ${humanSentence(error)}`,
     );
     // The retry hint survives on the job too, so `zas_jobs` can still say how
     // long the caller was asked to wait.
@@ -256,7 +255,7 @@ describe('buildServer', () => {
       expect(first.isError).toBe(false);
       expect(first.text).toContain('/agents/pair?p=p1');
       expect(first.text).toContain('ABCD-EFGH');
-      expect(first.text).toContain('Esperando la aprobación');
+      expect(first.text).toContain('Waiting for approval');
 
       const second = await call(client, 'zas_pair');
       expect(second.text).toContain('pending');
@@ -290,7 +289,7 @@ describe('buildServer', () => {
       const failed = await call(client, 'zas_pair');
       expect(failed.isError).toBe(true);
       expect(failed.text).toContain('pairing_expired');
-      expect(failed.text).toContain('El emparejamiento venció');
+      expect(failed.text).toContain('The pairing expired');
 
       const retry = await call(client, 'zas_pair');
       expect(retry.isError).toBe(false);

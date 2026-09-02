@@ -57,7 +57,7 @@ export async function runPair(opts: PairOptions): Promise<Identity> {
   const existing = loadIdentity(opts.profile);
   if (existing) {
     opts.log(
-      `Este perfil ya está emparejado como «${existing.name}». Se va a crear un agente nuevo; revocá el anterior desde Ajustes → Agentes.`,
+      `This profile is already paired as “${existing.name}”. A new agent will be created; revoke the old one from Settings → Agents.`,
     );
   }
 
@@ -93,11 +93,11 @@ export async function runPair(opts: PairOptions): Promise<Identity> {
   const minutesLeft = Math.max(0, Math.round((created.expires_at - now()) / 60_000));
   opts.log(
     [
-      'Abrí esta página con tu cuenta de Zas:',
+      'Open this page signed in to your Zas account:',
       `  ${pairUrl(opts.webBase, created.pairing_id)}`,
-      `Código:  ${formatCode(created.code)}`,
-      `Huella:  ${agentFingerprintShort(created.fingerprint)}`,
-      `Esperando la aprobación… (vence en ${minutesLeft} minutos)`,
+      `Code:        ${formatCode(created.code)}`,
+      `Fingerprint: ${agentFingerprintShort(created.fingerprint)}`,
+      `Waiting for approval… (expires in ${minutesLeft} minutes)`,
     ].join('\n'),
   );
 
@@ -160,15 +160,15 @@ export async function runPair(opts: PairOptions): Promise<Identity> {
   const claudeLines = (lead: string): string[] => [lead, `  ${claudeSnippet(opts.profile)}`];
   const codexLines = (lead: string): string[] => [lead, `  ${codexSnippet(opts.profile)}`];
   const install = opts.kind === 'claude_code'
-    ? claudeLines('Agregalo a Claude Code:')
+    ? claudeLines('Add it to Claude Code:')
     : opts.kind === 'codex'
-      ? codexLines('Agregalo a Codex:')
+      ? codexLines('Add it to Codex:')
       // An agent of any other kind speaks one of the two configurations, and
       // this side cannot tell which: both, and the owner picks.
-      : [...claudeLines('Agregalo a Claude Code:'), ...codexLines('O a Codex:')];
+      : [...claudeLines('Add it to Claude Code:'), ...codexLines('Or to Codex:')];
   opts.log(
     [
-      `Listo: el agente «${identity.name}» quedó emparejado con tu cuenta.`,
+      `Done: the agent “${identity.name}” is paired with your account.`,
       ...install,
     ].join('\n'),
   );

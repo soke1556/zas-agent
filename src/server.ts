@@ -57,16 +57,16 @@ interface Pairing {
   error?: unknown;
 }
 
-/** What the agent may do with one channel, in the language the owner set it in.
+/** What the agent may do with one channel.
  *  `view` is a permission on the channel and outranks the grant's own `send`,
  *  so a channel the owner switched to view-only never claims it can send. A
  *  channel in Directo mode is the same story: `send.ts` refuses every send to
  *  one with `direct_mode`, so this line must not promise otherwise. */
 function rightsOf(grant: RemoteGrant): string {
   const rights: string[] = [];
-  if (grant.send && grant.mode !== 'view' && !grant.direct_mode) rights.push('envía');
-  if (grant.read) rights.push('lee');
-  return rights.length > 0 ? rights.join(' · ') : 'sin permisos';
+  if (grant.send && grant.mode !== 'view' && !grant.direct_mode) rights.push('send');
+  if (grant.read) rights.push('read');
+  return rights.length > 0 ? rights.join(' · ') : 'no access';
 }
 
 export function buildServer(profile: string, deps: ServerDeps = {}): McpServer {
@@ -95,7 +95,7 @@ export function buildServer(profile: string, deps: ServerDeps = {}): McpServer {
 
   const failed = (e: unknown) => {
     const err = e instanceof ZasError ? e : new ZasError('internal', 0, String(e));
-    return { isError: true, ...text(`${err.code}: ${humanSentence(err, 'es')} / ${humanSentence(err, 'en')}`) };
+    return { isError: true, ...text(`${err.code}: ${humanSentence(err)}`) };
   };
 
   /** A job's own answer. `done` hands back the result; `failed` is reported the
@@ -125,7 +125,7 @@ export function buildServer(profile: string, deps: ServerDeps = {}): McpServer {
       // is a question, and the answer to it is not a failure. A damaged
       // identity file is a different thing and still reaches `failed` below.
       if (!(deps.identity ?? loadIdentity(profile))) {
-        return text(humanSentence(new ZasError('not_paired', 0), 'es'));
+        return text(humanSentence(new ZasError('not_paired', 0)));
       }
       const c = ctx();
       const grants = await grantsFor(c.client, profile);
@@ -140,10 +140,10 @@ export function buildServer(profile: string, deps: ServerDeps = {}): McpServer {
         return `  ${name} · ${rightsOf(grant)}`;
       });
       return text([
-        `Emparejado como «${c.identity.name}» (${c.identity.kind}) con la cuenta ${c.identity.owner_uid}.`,
-        grants.length > 0 ? 'Canales:' : 'Sin canales: el dueño todavía no le dio acceso a ninguno.',
+        `Paired as “${c.identity.name}” (${c.identity.kind}) with account ${c.identity.owner_uid}.`,
+        grants.length > 0 ? 'Channels:' : 'No channels: the owner has not granted access to any yet.',
         ...lines,
-        `${packageName()} ${agentVersion()} · perfil ${profile}`,
+        `${packageName()} ${agentVersion()} · profile ${profile}`,
       ].join('\n'));
     } catch (e) {
       return failed(e);
@@ -183,7 +183,7 @@ export function buildServer(profile: string, deps: ServerDeps = {}): McpServer {
         pairing = null;
         return failed(state.error);
       }
-      return text(state.logs.join('\n') || 'Abriendo el emparejamiento…');
+      return text(state.logs.join('\n') || 'Opening the pairing…');
     }
     if (pairing.status === 'paired') return text(`paired as ${pairing.identity?.name ?? ''}`.trim());
     if (pairing.status === 'failed') {

@@ -62,16 +62,15 @@ describe('errors', () => {
     // The closed set is exactly what has a sentence, so a code without one
     // reaches a terminal as a bare server-shaped word.
     for (const code of [...scanned, ...SIGN_IN_CODES, 'pairing_expired', 'pairing_cancelled']) {
-      expect(humanSentence(new ZasError(code, 0), 'es'), code).not.toBe(`Zas respondió ${code} (0).`);
-      expect(humanSentence(new ZasError(code, 0), 'en'), code).not.toBe(`Zas answered ${code} (0).`);
+      expect(humanSentence(new ZasError(code, 0)), code).not.toBe(`Zas answered ${code} (0).`);
     }
   });
 
   it('puts the damaged file path into the sentence', () => {
-    const sentence = humanSentence(new ZasError('identity_corrupt', 0, '/home/x/.zas/agent/p/identity.json'), 'en');
+    const sentence = humanSentence(new ZasError('identity_corrupt', 0, '/home/x/.zas/agent/p/identity.json'));
     expect(sentence).toContain('/home/x/.zas/agent/p/identity.json');
     expect(sentence).not.toContain('{path}');
-    expect(humanSentence(new ZasError('who_knows', 418))).toBe('Zas respondió who_knows (418).');
+    expect(humanSentence(new ZasError('who_knows', 418))).toBe('Zas answered who_knows (418).');
   });
 
   it('prints a path with replacement patterns in it literally', () => {
@@ -79,8 +78,7 @@ describe('errors', () => {
     // directory can be named any of them. The owner has to read back the path
     // they actually have on disk.
     const path = "/home/x/$&$'$`/identity.json";
-    const sentence = humanSentence(new ZasError('identity_corrupt', 0, path), 'en');
+    const sentence = humanSentence(new ZasError('identity_corrupt', 0, path));
     expect(sentence).toContain(path);
-    expect(humanSentence(new ZasError('identity_corrupt', 0, path), 'es')).toContain(path);
   });
 });

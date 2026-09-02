@@ -41,7 +41,7 @@ describe('identity files', () => {
     for (const bad of ['..', '.', '.hidden', 'a/b', 'a\\b', '', 'x'.repeat(65), 'ñ']) {
       expect(() => profileDir(bad), bad).toThrow(ZasError);
     }
-    expect(() => profileDir('..')).toThrow(/perfil/i);
+    expect(() => profileDir('..')).toThrow(/profile/i);
     for (const good of ['claude-code', 'codex', 'mi-agente', 'a.b_c-1', 'x'.repeat(64)]) {
       expect(profileDir(good), good).toBe(join(home, good));
     }

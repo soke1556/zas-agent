@@ -48,7 +48,7 @@ export function parseArgs(argv: string[]): Parsed {
     else if (name === '--profile') {
       parsed.profile = take() || DEFAULT_PROFILE;
       if (!PROFILE_RE.test(parsed.profile)) {
-        return { ...parsed, command: 'invalid', message: `Perfil inválido: ${parsed.profile}` };
+        return { ...parsed, command: 'invalid', message: `Invalid profile: ${parsed.profile}` };
       }
     } else if (name === '--kind') {
       const kind = take();
@@ -88,7 +88,7 @@ export async function main(argv: string[], log: (line: string) => void = (l) => 
   }
 
   if (args.command === 'help') {
-    if (args.unknown) log(`No entiendo «${args.unknown}».`);
+    if (args.unknown) log(`Unknown argument “${args.unknown}”.`);
     log(USAGE);
     return args.unknown ? 2 : 0;
   }
@@ -105,7 +105,7 @@ export async function main(argv: string[], log: (line: string) => void = (l) => 
       });
     } catch (e) {
       const err = e instanceof ZasError ? e : new ZasError('internal', 0, String(e));
-      log(humanSentence(err, 'es'));
+      log(humanSentence(err));
       return 1;
     }
     // `runPair`'s own last line already carries the install snippet for the

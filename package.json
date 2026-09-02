@@ -1,6 +1,6 @@
 {
   "name": "zas-agent",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "MCP server that lets a coding agent send files and notes into your Zas channels.",
   "type": "module",
   "license": "MIT",
@@ -18,7 +18,7 @@
     "claude-code",
     "codex",
     "zas",
-    "end-to-end-encryption"
+    "encryption"
   ],
   "mcpName": "io.github.soke1556/zas-agent",
   "bin": {

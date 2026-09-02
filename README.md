@@ -10,6 +10,19 @@ read items back out of them.
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/soke1556/zas-agent/badge)](https://scorecard.dev/viewer/?uri=github.com/soke1556/zas-agent)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
+## What is Zas
+
+[Zas](https://zas.red) moves things between your devices and the people you
+choose: files, photos, text, code. You put something into a channel on one
+device and use it on another. Whatever you do not pin leaves on its own after a
+few days, so there is nothing to tidy up later. Everything is encrypted on the
+device before it is uploaded: the database and the object storage receive
+encrypted bytes, not filenames, content or previews.
+
+This package is the piece that lets a coding agent use your channels the way
+your other devices do, under an identity of its own that you approve, that you
+scope to the channels you choose, and that you can revoke.
+
 ## What it does
 
 Your coding agent gets seven tools. It can send a file or a note into a channel
@@ -56,11 +69,11 @@ args = ["-y", "zas-agent", "--profile", "codex"]
 terminal shows four things:
 
 ```
-Abrí esta página con tu cuenta de Zas:
+Open this page signed in to your Zas account:
   https://zas.red/agents/pair?p=...
-Código:  ABCD-EFGH
-Huella:  1a2b 3c4d 5e6f 7a8b
-Esperando la aprobación… (vence en 10 minutos)
+Code:        ABCD-EFGH
+Fingerprint: 1a2b 3c4d 5e6f 7a8b
+Waiting for approval… (expires in 10 minutes)
 ```
 
 Open the link signed in to your Zas account. Check that the fingerprint on the
@@ -98,11 +111,12 @@ source, the sentence says so.
 - **Everything it sends is visible as its work.** Every item carries the `>_`
   agent mark and the agent's name, in the channel, on every device you read Zas
   from.
-- **You can revoke it at any time.** Settings → Agentes → the agent → Revocar.
+- **You can revoke it at any time.** Settings → Agents → the agent → Revoke.
   The session stops, its refresh tokens are revoked *(server-side)*, and the
   next tool call answers "the owner revoked this agent". What it already sent
   stays where it is. You can also drop a single channel and keep the rest.
-- **Content is end-to-end encrypted, the same way the app does it.** The
+- **Content is encrypted on your machine before it leaves, the same way the
+  app does it.** The
   chunking, the manifest and the envelope formats under `src/shared/` are the
   same modules the Zas web app ships. The server stores ciphertext and never
   sees a channel key, a channel name or item plaintext *(server-side)*.
@@ -171,7 +185,7 @@ string ever reaches a terminal.
 | `missing_token` | The session token is missing; pair the agent again. |
 | `internal` | Something failed inside the agent. |
 
-Every code comes back as one sentence in Spanish and one in English, never as a
+Every code comes back as one sentence in English, never as a
 stack trace.
 
 ## Tools
@@ -233,7 +247,7 @@ profile they live in, and the package does not try to set any others.
 
 Deleting the directory makes this machine forget the agent. It does not revoke
 anything: the account side is closed from the web app, under
-Settings → Agentes → Revocar.
+Settings → Agents → Revoke.
 
 ## Configuration
 

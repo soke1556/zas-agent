@@ -57,7 +57,7 @@ describe('parseArgs', () => {
   it('refuses a profile that is not a plain directory name', async () => {
     expect(parseArgs(['pair', '--profile', '../../elsewhere'])).toMatchObject({
       command: 'invalid',
-      message: 'Perfil inválido: ../../elsewhere',
+      message: 'Invalid profile: ../../elsewhere',
     });
     expect(parseArgs(['--profile=.hidden']).command).toBe('invalid');
     expect(parseArgs(['--profile=a/b']).command).toBe('invalid');
@@ -65,6 +65,6 @@ describe('parseArgs', () => {
 
     const lines: string[] = [];
     expect(await main(['pair', '--profile', '../../elsewhere'], (line) => lines.push(line))).toBe(2);
-    expect(lines.join('\n')).toContain('Perfil inválido: ../../elsewhere');
+    expect(lines.join('\n')).toContain('Invalid profile: ../../elsewhere');
   });
 });
