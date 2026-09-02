@@ -36,12 +36,23 @@ jobs:
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 22
+          # Node 24 ships an npm new enough for trusted publishing, so nothing
+          # is installed from outside the lockfile.
+          node-version: 24
           cache: npm
           registry-url: https://registry.npmjs.org
 
-      # Trusted publishing needs npm 11.5.1 or newer; Node 22 still ships 10.
-      - run: npm install -g npm@^11
+      # Trusted publishing needs npm 11.5.1 or newer.
+      - name: npm is new enough for trusted publishing
+        run: |
+          set -euo pipefail
+          node -e '
+            const v = require("child_process").execSync("npm --version").toString().trim();
+            const [a, b, c] = v.split(".").map(Number);
+            const ok = a > 11 || (a === 11 && (b > 5 || (b === 5 && c >= 1)));
+            if (!ok) { console.error(`npm ${v} is older than 11.5.1`); process.exit(1); }
+            console.log(`npm ${v}`);
+          '
 
       - run: npm ci
 

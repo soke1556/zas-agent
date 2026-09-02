@@ -456,6 +456,8 @@ export async function sendFile(
   const title = input.title ?? name;
   // A view, not a copy: `new Uint8Array(buffer)` would hold the file twice.
   const file = await fsp.readFile(input.path);
+  // The stat above is the cheap early exit; the file may have grown since.
+  if (file.byteLength > MAX_FILE_BYTES) throw new ZasError('file_too_big', 413);
   const bytes = new Uint8Array(file.buffer, file.byteOffset, file.byteLength);
   const contentHash = await blake3Hex(bytes);
   const key = await receiptKey(ctx, grant.channel_id, contentHash, title);

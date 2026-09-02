@@ -15,7 +15,7 @@
 // would then be a package that does not build.
 import { execFileSync } from 'node:child_process';
 import {
-  cpSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync,
+  cpSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync,
 } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -225,11 +225,7 @@ function rewriteImports(target) {
   }
   const survivors = walk(target)
     .filter((f) => !f.startsWith('.git/') && !f.startsWith('scripts/'))
-    .filter((rel) => {
-      const full = join(target, rel);
-      if (statSync(full).size > 4_000_000) return false;
-      return readFileSync(full, 'utf8').includes('../../shared');
-    });
+    .filter((rel) => readFileSync(join(target, rel), 'utf8').includes('../../shared'));
   if (survivors.length > 0) fail(`monorepo-relative shared imports survived in: ${survivors.join(', ')}`);
   return rewritten;
 }

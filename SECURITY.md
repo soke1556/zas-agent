@@ -18,7 +18,8 @@ are no backports.
 
 Use GitHub private vulnerability reporting on this repository: open the
 **Security** tab and press **Report a vulnerability**. The report stays private
-between you and the maintainer until an advisory is published.
+between you and the maintainer until an advisory is published. The form is at
+<https://github.com/soke1556/zas-agent/security/advisories/new>.
 
 Please do not open a public issue, a discussion or a pull request for a
 vulnerability. Please do not post it on social media before a fix is out.
