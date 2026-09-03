@@ -145,7 +145,7 @@ export const AGENT_OWNER_ERRORS = [
 ] as const;
 export type AgentOwnerError = (typeof AGENT_OWNER_ERRORS)[number];
 
-export const AGENT_ACTIVITY_KINDS = ['paired', 'send', 'direct_sent', 'direct_failed', 'grant_changed', 'revoked'] as const;
+export const AGENT_ACTIVITY_KINDS = ['paired', 'send', 'direct_sent', 'direct_received', 'direct_failed', 'grant_changed', 'revoked'] as const;
 export type AgentActivityKind = (typeof AGENT_ACTIVITY_KINDS)[number];
 
 /** One channel grant as the owner's browser writes it and the agent reads it. */

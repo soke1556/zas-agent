@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-09-03
+
+### Added
+
+- `zas_receive_direct` receives a file the owner sends through Directo,
+  straight onto this machine. It waits for the offer, takes it, and writes
+  the file to disk; nothing is stored anywhere. Receiving is reading, so it
+  needs a grant with `read`, and the channel has to be in Directo mode. The
+  call returns the result, or a job id after a minute; `zas_jobs` follows the
+  phases `waiting`, `connecting`, `flight`, `finishing`.
+- `zas_receive_direct_fallback` finishes a receive that failed in flight,
+  when the sender chose reliable delivery for it: the encrypted copy is
+  downloaded and decrypted onto the same destination.
+- New error codes: `no_offer` and `offer_taken`.
+
+### Changed
+
+- The agent claims an offer only inside a tool call. It never watches a
+  channel: an exchange takes two devices and the first claim wins, so a
+  watcher would take files meant for the owner's own phone.
+- A received file never overwrites an existing one. It is written 0600
+  through a temporary name and renamed only once the transfer is verified,
+  so a run that breaks leaves nothing that reads as complete. The answered
+  `path` is where the bytes actually went.
+- `zas_status` says `receive (Directo)` where it said `read` for a channel
+  in Directo mode: such a channel stores nothing, so there is no list of
+  items behind the grant, only live offers to take.
+
 ## [0.4.0] - 2026-09-03
 
 ### Added

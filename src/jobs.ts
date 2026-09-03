@@ -5,10 +5,11 @@
 import { randomUUID } from 'node:crypto';
 import type { DirectJobPhase, DirectResult } from './direct.js';
 import { humanSentence, ZasError } from './errors.js';
+import type { ReceiveJobPhase, ReceiveResult } from './receive.js';
 import type { SendPhase, SendResult } from './send.js';
 
-export type JobPhase = SendPhase | DirectJobPhase;
-export type JobResult = SendResult | DirectResult;
+export type JobPhase = SendPhase | DirectJobPhase | ReceiveJobPhase;
+export type JobResult = SendResult | DirectResult | ReceiveResult;
 
 /** Enough of the `ZasError` to build it again. A job's failure has to answer
  *  exactly as the same failure thrown from the call would — with the path in
@@ -27,7 +28,7 @@ export interface JobError {
 
 export interface Job {
   id: string;
-  kind: 'file' | 'note' | 'direct' | 'fallback';
+  kind: 'file' | 'note' | 'direct' | 'receive' | 'fallback';
   title: string;
   channel: string;
   started_at: number;

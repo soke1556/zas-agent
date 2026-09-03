@@ -325,7 +325,7 @@ function freeName(target: string): string {
  *  call: two downloads of the same file name never meet. `created` names that
  *  directory, and only that one, so a download that fails can take it away
  *  again instead of leaving an empty `zas-agent-*` behind per failure. */
-function destinationOf(
+export function destinationOf(
   dest: string | undefined,
   name: unknown,
   fallback: string,

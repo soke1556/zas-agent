@@ -1,4 +1,4 @@
-// The MCP surface: seven tools, and nothing behind them that the CLI could not
+// The MCP surface: eleven tools, and nothing behind them that the CLI could not
 // also call. Everything a coding agent is allowed to do with a Zas account
 // passes through here, so two rules hold for every tool in the file. It answers
 // in the closed error vocabulary — `code: <es> / <en>` — and never with a stack
@@ -11,6 +11,7 @@ import { normalizePairingCode } from './shared/agent.js';
 import { ZasClient } from './client.js';
 import { sendDirect, sendDirectFallback, type DirectDeps, type FailedDirect } from './direct.js';
 import { humanSentence, ZasError } from './errors.js';
+import { receiveDirect, receiveDirectFallback, type FailedReceive, type ReceiveDeps } from './receive.js';
 import { channelNameOf, grantsFor } from './grants.js';
 import { defaultEndpoints, loadIdentity, type Identity, type RemoteGrant } from './identity.js';
 import { JobRunner } from './jobs.js';
@@ -30,6 +31,8 @@ export interface ServerDeps {
   announceMs?: number;
   /** The Directo job's engine, file and clocks, for driving it offline. */
   direct?: DirectDeps;
+  /** The same, for a Directo receive. */
+  receive?: ReceiveDeps;
 }
 
 /** The version esbuild bakes in (see `build.mjs`). Absent under vitest and
@@ -73,7 +76,9 @@ interface Pairing {
 function rightsOf(grant: RemoteGrant): string {
   const rights: string[] = [];
   if (grant.send && grant.mode !== 'view') rights.push(grant.direct_mode ? 'send (Directo)' : 'send');
-  if (grant.read) rights.push('read');
+  // Reading a Directo channel is receiving: it stores nothing, so there is no
+  // list of items behind the grant, only live offers to take.
+  if (grant.read) rights.push(grant.direct_mode ? 'receive (Directo)' : 'read');
   return rights.length > 0 ? rights.join(' · ') : 'no access';
 }
 
@@ -309,6 +314,61 @@ export function buildServer(profile: string, deps: ServerDeps = {}): McpServer {
       );
       const outcome = await runner.wait(job);
       if (outcome.status === 'done') failedDirects.delete(input.job);
+      return settled(outcome);
+    } catch (e) {
+      return failed(e);
+    }
+  });
+
+  /** The failed receives a fallback download can still finish, by job id.
+   *  Bounded like the job list: a record holds the channel key. */
+  const failedReceives = new Map<string, FailedReceive>();
+  const rememberFailedReceive = (jobId: string, record: FailedReceive): void => {
+    failedReceives.set(jobId, record);
+    if (failedReceives.size > 50) failedReceives.delete(failedReceives.keys().next().value!);
+  };
+
+  server.registerTool('zas_receive_direct', {
+    description: "Receive a file the owner sends through Directo, straight onto this machine. Call it when the owner says they are sending you something: it waits for the offer, takes it, and writes the file to disk. Nothing is stored anywhere. Only for a channel in Directo mode, and only with a grant that includes reading. The call waits a minute and then returns a job id to check with zas_jobs; the wait for an offer alone can take ten minutes. Returns the path written; it never overwrites an existing file." + AGENT_CUE,
+    inputSchema: {
+      channel: z.string().optional().describe('Channel name or id. Optional when the agent holds exactly one channel.'),
+      dest: z.string().optional().describe('Where to write the file. A directory means "inside it". Defaults to a fresh temporary directory.'),
+    },
+  }, async (input) => {
+    try {
+      const c = ctx();
+      // `job` is assigned before the work reaches its first await, and the
+      // callback runs long after: the closure reads the assigned value.
+      let job: ReturnType<JobRunner['start']>;
+      job = runner.start(
+        'receive', input.dest ?? 'Directo', input.channel ?? '',
+        (report) => receiveDirect(c, input, report, {
+          ...(deps.receive ?? {}),
+          onFailed: (record) => rememberFailedReceive(job.id, record),
+        }),
+      );
+      return settled(await runner.wait(job));
+    } catch (e) {
+      return failed(e);
+    }
+  });
+
+  server.registerTool('zas_receive_direct_fallback', {
+    description: 'After a zas_receive_direct job failed in flight, download the encrypted copy the sender chose to store instead. It works only if the person who was sending picked reliable delivery for that transfer. The file is decrypted on this machine and written to the same destination. Pass the failed job\u2019s id.' + AGENT_CUE,
+    inputSchema: {
+      job: z.string().describe('The job id zas_receive_direct or zas_jobs reported for the receive that failed.'),
+    },
+  }, async (input) => {
+    try {
+      const c = ctx();
+      const record = failedReceives.get(input.job);
+      if (!record) return failed(new ZasError('direct_not_failed', 0));
+      const job = runner.start(
+        'fallback', record.meta.name, record.channel_name,
+        (report) => receiveDirectFallback(c, record, report, deps.receive),
+      );
+      const outcome = await runner.wait(job);
+      if (outcome.status === 'done') failedReceives.delete(input.job);
       return settled(outcome);
     } catch (e) {
       return failed(e);

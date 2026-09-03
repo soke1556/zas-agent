@@ -102,10 +102,10 @@ interface FirestoreDoc { name?: string; fields?: Record<string, { stringValue?: 
 const stringField = (doc: unknown, key: string): string | undefined =>
   (doc as FirestoreDoc | null)?.fields?.[key]?.stringValue;
 
-const defaultSleep = (ms: number): Promise<void> => new Promise((resolve) => { setTimeout(resolve, ms); });
+export const defaultSleep = (ms: number): Promise<void> => new Promise((resolve) => { setTimeout(resolve, ms); });
 
 /** The web's `deviceToken()`: sixteen random bytes, URL-safe. */
-const newDeviceToken = (): string => randomBytes(16).toString('base64url');
+export const newDeviceToken = (): string => randomBytes(16).toString('base64url');
 
 let webrtc: Promise<void> | null = null;
 
@@ -140,7 +140,7 @@ async function directGrantFor(ctx: SendContext, channel: string | undefined): Pr
   return grant;
 }
 
-function nameOf(ctx: SendContext, grant: RemoteGrant): string {
+export function channelLabel(ctx: SendContext, grant: RemoteGrant): string {
   try {
     return channelNameOf(ctx.identity, grant);
   } catch {
@@ -150,7 +150,7 @@ function nameOf(ctx: SendContext, grant: RemoteGrant): string {
 
 /** The sealing the web does in `sealDirect`/`openDirect`: JSON under the
  *  channel key, the generation stamped so a receiver on an older key knows. */
-function sealer(key: Uint8Array, keyVersion: number) {
+export function sealer(key: Uint8Array, keyVersion: number) {
   return {
     seal: (value: unknown): string =>
       bytesToB64(sealRaw(key, keyVersion, new TextEncoder().encode(JSON.stringify(value)))),
@@ -169,7 +169,7 @@ export async function sendDirect(
   const sleep = deps.sleep ?? defaultSleep;
   const grant = await directGrantFor(ctx, input.channel);
   const key = channelKeyOf(ctx.identity, grant);
-  const channelName = nameOf(ctx, grant);
+  const channelName = channelLabel(ctx, grant);
   // A path this agent cannot open is one answer whatever the errno: the
   // caller named it, and a raw Node error is not a sentence.
   const file = await (deps.openFile ?? openAsBlob)(input.path).catch(() => {

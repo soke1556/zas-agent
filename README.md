@@ -25,9 +25,9 @@ scope to the channels you choose, and that you can revoke.
 
 ## What it does
 
-Your coding agent gets nine tools. It can send a file or a note into a channel
-you picked, send a file live through Directo, list what is in that channel,
-and pull one item back onto disk.
+Your coding agent gets eleven tools. It can send a file or a note into a channel
+you picked, send or receive a file live through Directo, list what is in that
+channel, and pull one item back onto disk.
 Everything it sends is encrypted on your machine before it leaves, lands in your
 account, and is marked in the channel as sent by that agent. The agent has an
 identity of its own and never holds your account key: pairing mints a key pair
@@ -151,8 +151,10 @@ ones marked *(server-side)* are enforced by the Zas server.
 - **No stored sending into a view-only channel, and none into a channel in
   Directo mode.** Both are refused before a byte is uploaded. A channel in
   Directo mode takes `zas_send_direct`, a live transfer that stores nothing.
-- **No receiving.** The agent sends through Directo; it never claims an
-  offer, so nothing can be pushed onto this machine through it.
+- **No receiving unless the grant says read.** Receiving through Directo
+  writes a file onto this machine, so `zas_receive_direct` takes the same
+  `read` switch as listing. And it only ever runs inside a tool call: the
+  agent never watches your channels, so nothing arrives unasked.
 - **Nothing outside its allowlist.** The API refuses an agent on every route
   that is not on a short, explicit list, and Firestore rules refuse it your
   account document, your devices, and any channel without an active read grant
@@ -182,9 +184,11 @@ string ever reaches a terminal.
 | `direct_mode` | That channel is in Directo mode. |
 | `not_direct_mode` | That channel is not in Directo mode. |
 | `not_claimed` | Nobody received the file within ten minutes; the offer was withdrawn. |
-| `direct_cancelled` | The offer was cancelled from the receiving side. |
+| `no_offer` | Nobody offered a file through Directo while the call waited. |
+| `offer_taken` | Another device received that file first. |
+| `direct_cancelled` | The offer was cancelled from the other side. |
 | `direct_failed` | The Directo transfer failed in flight. |
-| `direct_not_failed` | That job is not a Directo send that failed in flight. |
+| `direct_not_failed` | That job is not a Directo transfer that failed in flight. |
 | `file_changed` | The file changed since the Directo offer. |
 | `webrtc_unavailable` | The WebRTC engine could not be loaded on this machine. |
 | `fallback_unavailable` | Reliable delivery is not available right now. |
@@ -220,17 +224,19 @@ stack trace.
 | `zas_send_note` | Sends a note — plain text, or a code snippet with its language — into one of the owner's channels. |
 | `zas_send_direct` | Sends a file through Directo: a live, device-to-device transfer into a channel in Directo mode. Nothing is stored. The owner presses Receive on another device within ten minutes; the call returns the result, or a job id after a minute. |
 | `zas_send_direct_fallback` | After a Directo send failed in flight, delivers the same file through reliable delivery: encrypted on this machine, stored in Cloudflare R2 for up to 24 hours, off the owner's quota. The owner's choice; the model is told to ask. |
+| `zas_receive_direct` | Receives a file the owner sends through Directo, onto this machine. Waits for the offer, takes it, and writes the file to disk. Needs a grant that includes reading, and a channel in Directo mode. Returns the path written, or a job id after a minute. |
+| `zas_receive_direct_fallback` | After a Directo receive failed in flight, downloads the encrypted copy the sender chose to store, and decrypts it to the same destination. |
 | `zas_list_items` | Lists the most recent items in one of the owner's channels. Needs a grant that includes reading. |
 | `zas_get_item` | Fetches one item. A note comes back as text; a file is written to disk. It never overwrites, so the path it answers with can differ from the one you asked for. |
 | `zas_jobs` | Lists the sends and Directo transfers this server started, newest first, with the phase each one reached — and where a `job_id` from a long send is redeemed. |
 
 `channel` takes a channel name or a channel id. A name has to match exactly one
 of the channels you granted; with exactly one grant, `zas_send_file`,
-`zas_send_note` and `zas_send_direct` can leave it out.
+`zas_send_note`, `zas_send_direct` and `zas_receive_direct` can leave it out.
 
 Directo needs a native module, [node-datachannel](https://github.com/murat-dogan/node-datachannel),
 WebRTC for Node. npm installs a prebuilt binary for Windows, macOS and Linux;
-the module loads the first time `zas_send_direct` runs, and a machine where it
+the module loads the first time a Directo tool runs, and a machine where it
 cannot load answers `webrtc_unavailable`. Every other tool works without it.
 
 Two things worth knowing before you point a model at your account:
@@ -238,13 +244,13 @@ Two things worth knowing before you point a model at your account:
 - `zas_send_file` and `zas_send_direct` send any file this process can read —
   `~/.ssh/id_rsa` and a `.env` included. Confirm with the owner before sending secrets, keys or
   credentials. Its tool description says so, so the model reads it too.
-- `zas_get_item` writes a new file under `dest`, or under the system temp
-  directory when you leave `dest` out. It never overwrites an existing file: a
-  name that is taken gets a suffix, and the path it answers with is the one it
-  actually wrote.
+- `zas_get_item` and `zas_receive_direct` write a new file under `dest`, or
+  under the system temp directory when you leave `dest` out. Neither ever
+  overwrites an existing file: a name that is taken gets a suffix, and the path
+  they answer with is the one they actually wrote.
 
-Everything either tool touches lands inside your own account and your own
-machine. Revoking the agent stops both.
+Everything those tools touch lands inside your own account and your own
+machine. Revoking the agent stops all of them.
 
 ## Data on disk
 
