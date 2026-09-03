@@ -1,5 +1,5 @@
-// The executable. Three things it can do: print its version, pair this machine
-// with a Zas account, or serve the MCP tools over stdio — which is what a
+// The executable. Three things it can do: print its version, pair this
+// profile's agent with a Zas account, or serve the MCP tools over stdio — which is what a
 // coding agent starts it for, and what the two install snippets configure.
 //
 // Stdout belongs to the MCP transport. Every line this file writes for a person
@@ -74,7 +74,7 @@ const USAGE = [
   'zas-agent — send files and notes from a coding agent into your Zas channels.',
   '',
   '  zas-agent [--profile <name>]                serve the MCP tools over stdio',
-  '  zas-agent pair [--profile <name>]           pair this machine with a Zas account',
+  '  zas-agent pair [--profile <name>]           pair this agent with a Zas account',
   '                 [--kind claude_code|codex|other] [--host <name>] [--no-open]',
   '  zas-agent --version',
 ].join('\n');

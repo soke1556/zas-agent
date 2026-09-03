@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-03
+
+### Added
+
+- Pairing again in a profile that is already paired replaces the agent
+  instead of adding a second one. The terminal opens the pairing as the old
+  agent, the approval page says which agent it replaces and fills in its
+  name and channels, and the old agent is revoked in the same step that
+  creates the new one. If the server no longer accepts the old agent, `pair`
+  says so and creates a new agent.
+
+### Changed
+
+- The help text, the tool descriptions and the README say "this agent" where
+  they said "this machine": a pairing is one profile's key pair, and one
+  machine can hold several.
+
 ## [0.2.1] - 2026-09-03
 
 ### Fixed
@@ -58,7 +75,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   two separate identities that cannot read each other's keys.
 - Install snippets for Claude Code and Codex, printed by `zas-agent pair`.
 
-[Unreleased]: https://github.com/soke1556/zas-agent/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/soke1556/zas-agent/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/soke1556/zas-agent/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/soke1556/zas-agent/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/soke1556/zas-agent/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/soke1556/zas-agent/compare/v0.1.0...v0.1.1

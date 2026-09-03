@@ -17,11 +17,18 @@ const PROFILE = 'mi-agente';
  *  two public pairing routes. The pairing key material is minted inside
  *  runPair, so the challenge/token handlers capture the P-256 key the
  *  pairing POST actually sent instead of assuming one ahead of time. */
-function fakeFetch(pollAnswers: Array<Record<string, unknown>>, pollStatuses: number[] = [], claimTransportFailures = 0) {
+function fakeFetch(
+  pollAnswers: Array<Record<string, unknown>>, pollStatuses: number[] = [], claimTransportFailures = 0,
+  /** An identity already on disk: its P-256 key signs the old agent's
+   *  sign-in, and `status` is what the replacement route answers with (201
+   *  when absent). */
+  replacement?: { p256Public: string; status?: number },
+) {
   const calls: string[] = [];
   const pollHeaders: string[] = [];
   const createBodies: Record<string, unknown>[] = [];
   const claims: { secret: string; code: string }[] = [];
+  const replacementAuth: string[] = [];
   let capturedP256Public = '';
   let capturedX25519Public = '';
   let pollIndex = 0;
@@ -35,6 +42,21 @@ function fakeFetch(pollAnswers: Array<Record<string, unknown>>, pollStatuses: nu
     calls.push(`${method} ${url}`);
     const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
 
+    if (url.endsWith('/v1/agents/me/pairings')) {
+      const headers = (init?.headers ?? {}) as Record<string, string>;
+      replacementAuth.push(headers.Authorization);
+      if (replacement?.status) return json(replacement.status, { error: 'agent_revoked' });
+      capturedP256Public = String(body.p256_public);
+      capturedX25519Public = String(body.x25519_public);
+      createBodies.push(body);
+      return json(201, {
+        pairing_id: 'p1',
+        poll_secret: 'f'.repeat(64),
+        expires_at: NOW + 10 * 60 * 1000,
+        protocol: 2,
+        fingerprint: 'ab12cd34ef567890' + '0'.repeat(48),
+      });
+    }
     if (url.endsWith('/v1/agents/pairings')) {
       capturedP256Public = String(body.p256_public);
       capturedX25519Public = String(body.x25519_public);
@@ -70,13 +92,18 @@ function fakeFetch(pollAnswers: Array<Record<string, unknown>>, pollStatuses: nu
       return json(200, { challenge_id: 'ch1', nonce: Buffer.alloc(32, 3).toString('base64') });
     }
     if (url.endsWith('/v1/agents/token')) {
-      const ok = verifyAgentChallenge(
-        b64ToBytes(capturedP256Public),
-        b64ToBytes(String(body.signature)),
-        String(body.agent_uid),
-        String(body.challenge_id),
-        Buffer.alloc(32, 3),
-      );
+      // The new key once the pairing exists; before that, only an identity
+      // already on disk can sign — which is what a replacement does first.
+      const signedBy = (pub: string) => {
+        try {
+          return verifyAgentChallenge(
+            b64ToBytes(pub), b64ToBytes(String(body.signature)), String(body.agent_uid), String(body.challenge_id), Buffer.alloc(32, 3),
+          );
+        } catch {
+          return false;
+        }
+      };
+      const ok = signedBy(capturedP256Public) || (replacement ? signedBy(replacement.p256Public) : false);
       return ok ? json(200, { token: 'custom-1', expires_in: 3600 }) : json(403, { error: 'bad_signature' });
     }
     if (url.includes('accounts:signInWithCustomToken')) {
@@ -91,7 +118,7 @@ function fakeFetch(pollAnswers: Array<Record<string, unknown>>, pollStatuses: nu
   });
 
   return {
-    fetchImpl, calls, pollHeaders, createBodies, claims,
+    fetchImpl, calls, pollHeaders, createBodies, claims, replacementAuth,
     x25519Public: () => capturedX25519Public,
     claimAttempts: () => claimAttempts,
   };
@@ -190,31 +217,57 @@ describe('runPair', () => {
     expect(loadPending('claude-code')).toBeNull();
   });
 
-  it('warns once and continues when the profile is already paired', async () => {
-    const existing: Identity = {
-      version: 1, agent_uid: 'agent_' + 'B'.repeat(22), owner_uid: 'owner-0', name: 'Old Agent', kind: 'claude_code',
-      host: 'old-box', ...newKeyMaterial(), ...defaultEndpoints(),
-    };
+  const oldIdentity = (): Identity => ({
+    version: 1, agent_uid: 'agent_' + 'B'.repeat(22), owner_uid: 'owner-0', name: 'Old Agent', kind: 'claude_code',
+    host: 'old-box', ...newKeyMaterial(), ...defaultEndpoints(),
+  });
+
+  const pairAgain = async (f: ReturnType<typeof fakeFetch>, logLines: string[]) => runPair({
+    profile: 'claude-code',
+    kind: 'claude_code',
+    webBase: 'https://zas.red',
+    apiBase: 'https://zas.red/api',
+    fetch: f.fetchImpl as unknown as typeof fetch,
+    sleep: vi.fn(async () => {}),
+    log: (line) => logLines.push(line),
+    now: () => NOW,
+    listen: false,
+  });
+
+  it('opens the pairing as the old agent when the profile is already paired, and says the approval replaces it', async () => {
+    const existing = oldIdentity();
     saveIdentity('claude-code', existing);
-
-    const f = fakeFetch([{ status: 'claimed', agent_uid: AGENT_UID, owner_uid: 'owner-1' }]);
+    const f = fakeFetch([{ status: 'claimed', agent_uid: AGENT_UID, owner_uid: 'owner-1' }], [], 0, { p256Public: existing.p256_public });
     const logLines: string[] = [];
-    const identity = await runPair({
-      profile: 'claude-code',
-      kind: 'claude_code',
-      webBase: 'https://zas.red',
-      apiBase: 'https://zas.red/api',
-      fetch: f.fetchImpl as unknown as typeof fetch,
-      sleep: vi.fn(async () => {}),
-      log: (line) => logLines.push(line),
-      now: () => NOW,
-      listen: false,
-    });
+    const identity = await pairAgain(f, logLines);
 
-    const warnLines = logLines.filter((l) => l.includes('is already paired'));
-    expect(warnLines).toHaveLength(1);
-    expect(warnLines[0]).toContain('“Old Agent”');
-    expect(warnLines[0]).toContain('Settings → Agents');
+    // Signed in as the old agent, then the authenticated route, never the public one.
+    expect(f.calls).toContain('POST https://zas.red/api/v1/agents/me/pairings');
+    expect(f.calls.filter((c) => c.endsWith('/v1/agents/pairings'))).toEqual([]);
+    expect(f.replacementAuth).toEqual(['Bearer id-1']);
+    expect(f.createBodies[0]).toMatchObject({ kind: 'claude_code', claim: true });
+    const said = logLines.filter((l) => l.includes('“Old Agent”'));
+    expect(said).toHaveLength(1);
+    expect(said[0]).toContain('Approving this pairing replaces that agent');
+    expect(logLines.at(-1)).toContain('replaces the previous agent of this profile');
+    expect(identity.agent_uid).toBe(AGENT_UID);
+    expect(identity.p256_public).not.toBe(existing.p256_public);
+    expect(loadIdentity('claude-code')).toEqual(identity);
+  });
+
+  it('falls back to an ordinary pairing when the server no longer accepts the old agent, and says so', async () => {
+    const existing = oldIdentity();
+    saveIdentity('claude-code', existing);
+    const f = fakeFetch([{ status: 'claimed', agent_uid: AGENT_UID, owner_uid: 'owner-1' }], [], 0, { p256Public: existing.p256_public, status: 403 });
+    const logLines: string[] = [];
+    const identity = await pairAgain(f, logLines);
+
+    expect(f.calls).toContain('POST https://zas.red/api/v1/agents/pairings');
+    const said = logLines.filter((l) => l.includes('“Old Agent”'));
+    expect(said).toHaveLength(1);
+    expect(said[0]).toContain('no longer accepts that agent (agent_revoked)');
+    expect(said[0]).toContain('Settings → Agents');
+    expect(logLines.at(-1)).not.toContain('replaces the previous agent');
     expect(identity.agent_uid).toBe(AGENT_UID);
     expect(loadIdentity('claude-code')).toEqual(identity);
   });

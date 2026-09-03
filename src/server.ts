@@ -122,7 +122,7 @@ export function buildServer(profile: string, deps: ServerDeps = {}): McpServer {
   // ---- status ----
 
   server.registerTool('zas_status', {
-    description: "Say whether this machine is paired with a Zas account, and list the owner's channels this agent may send to or read from." + AGENT_CUE,
+    description: "Say whether this agent is paired with a Zas account, and list the owner's channels it may send to or read from." + AGENT_CUE,
   }, async () => {
     try {
       // Deliberately not an error when the profile is unpaired: "am I set up?"
@@ -159,7 +159,7 @@ export function buildServer(profile: string, deps: ServerDeps = {}): McpServer {
   let pairing: Pairing | null = null;
 
   server.registerTool('zas_pair', {
-    description: 'Pair this machine with a Zas account. The first call returns a URL for the owner to open; a later call says whether they approved. If the page shows a code, call again with `code`.' + AGENT_CUE,
+    description: 'Pair this agent with a Zas account. The first call returns a URL for the owner to open; a later call says whether they approved. If the page shows a code, call again with `code`. In a profile that is already paired, approval replaces the old agent.' + AGENT_CUE,
     inputSchema: {
       code: z.string().optional().describe('The code the pairing page shows when the browser could not reach this machine.'),
     },

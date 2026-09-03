@@ -35,7 +35,7 @@ get a short-lived session.
 
 ## Install
 
-Pair the machine first, then hand the command to your harness.
+Pair the agent first, then hand the command to your harness.
 
 **Pair**
 
@@ -168,7 +168,7 @@ string ever reaches a terminal.
 
 | Code | What it means |
 | --- | --- |
-| `not_paired` | This machine is not paired yet. |
+| `not_paired` | This agent is not paired yet. |
 | `identity_corrupt` | The identity file on disk is damaged. |
 | `agent_revoked` | The owner revoked this agent. |
 | `agent_forbidden` | Only the account owner can do that. |
@@ -203,8 +203,8 @@ stack trace.
 
 | Tool | What it does |
 | --- | --- |
-| `zas_status` | Says whether this machine is paired with a Zas account, and lists the owner's channels this agent may send to or read from. |
-| `zas_pair` | Pairs this machine with a Zas account. The first call returns a URL for the owner to open; a later call says whether they approved. If the page shows a code, a call with `code` claims with it. |
+| `zas_status` | Says whether this agent is paired with a Zas account, and lists the owner's channels it may send to or read from. |
+| `zas_pair` | Pairs this agent with a Zas account. The first call returns a URL for the owner to open; a later call says whether they approved. If the page shows a code, a call with `code` claims with it. In a profile that is already paired, approval replaces the old agent. |
 | `zas_send_file` | Sends a file from this machine into one of the owner's channels. Returns the item id, or a job id when the upload takes longer than a minute. |
 | `zas_send_note` | Sends a note — plain text, or a code snippet with its language — into one of the owner's channels. |
 | `zas_list_items` | Lists the most recent items in one of the owner's channels. Needs a grant that includes reading. |
@@ -259,6 +259,22 @@ profile they live in, and the package does not try to set any others.
 Deleting the directory makes this machine forget the agent. It does not revoke
 anything: the account side is closed from the web app, under
 Settings → Agents → Revoke.
+
+## Pairing again
+
+A pairing is one profile's key pair, not the machine and not the program. A
+profile holds one agent. Running `zas-agent pair` in a profile that is already
+paired opens a replacement: the terminal signs the request with the old
+identity, the approval page says which agent it replaces and fills in its name
+and channels, and the old agent is revoked in the same step that creates the
+new one. Its row stays under Settings → Agents as revoked until you remove it,
+and it keeps costing a slot until then. If the old agent was already revoked
+or removed, `pair` says so and creates a new agent.
+
+One machine that runs Claude Code and Codex has two profiles (`claude-code`
+and `codex`), two agents, two approvals and two rows. Revoking one does not
+touch the other. Two programs pointed at the same `--profile` act as one
+agent: same keys, same channels, one row.
 
 ## Configuration
 

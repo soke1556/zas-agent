@@ -85,24 +85,35 @@ export async function runPair(opts: PairOptions): Promise<Identity> {
   const now = opts.now ?? (() => Date.now());
 
   const existing = loadIdentity(opts.profile);
-  if (existing) {
-    opts.log(
-      `This profile is already paired as “${existing.name}”. A new agent will be created; revoke the old one from Settings → Agents.`,
-    );
-  }
-
   const host = (opts.host ?? hostname()).slice(0, AGENT_HOST_MAX);
   const keys = newKeyMaterial();
   const endpoints = { ...defaultEndpoints(), api_base: opts.apiBase };
+  const request = { kind: opts.kind, host, x25519_public: keys.x25519_public, p256_public: keys.p256_public, claim: true };
 
-  const created = await apiPublic<PairingCreated>(
-    opts.apiBase,
-    'POST',
-    '/v1/agents/pairings',
-    { kind: opts.kind, host, x25519_public: keys.x25519_public, p256_public: keys.p256_public, claim: true },
-    {},
-    opts.fetch,
-  );
+  // A profile holds one agent. When it already holds one, the pairing is
+  // opened as that agent, so approving it retires the old one in the same
+  // step that creates the new one, and the page can say which agent it
+  // replaces. An old identity the server no longer accepts — revoked,
+  // removed, or a server without the route — opens an ordinary pairing
+  // instead, and the old row is the owner's to remove.
+  let created: PairingCreated | null = null;
+  let replacing = false;
+  if (existing) {
+    try {
+      const old = new ZasClient({ ...existing, api_base: opts.apiBase }, { fetch: opts.fetch, now });
+      created = await old.api<PairingCreated>('POST', '/agents/me/pairings', request);
+      replacing = true;
+      opts.log(`This profile is paired as “${existing.name}”. Approving this pairing replaces that agent.`);
+    } catch (err) {
+      const code = err instanceof ZasError ? err.code : 'network';
+      opts.log(
+        `This profile was paired as “${existing.name}”, but the server no longer accepts that agent (${code}). A new agent will be created; remove the old one from Settings → Agents.`,
+      );
+    }
+  }
+  if (!created) {
+    created = await apiPublic<PairingCreated>(opts.apiBase, 'POST', '/v1/agents/pairings', request, {}, opts.fetch);
+  }
 
   // One claim per pairing, whichever side hands the code over first. A second
   // code that arrives while a claim is in flight waits for that answer
@@ -297,6 +308,7 @@ export async function runPair(opts: PairOptions): Promise<Identity> {
   opts.log(
     [
       `Done: the agent “${identity.name}” is paired with your account.`,
+      ...(replacing ? ['It replaces the previous agent of this profile, which is now revoked.'] : []),
       ...install,
     ].join('\n'),
   );
