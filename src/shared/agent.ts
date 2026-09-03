@@ -4,6 +4,7 @@
 import { p256 } from '@noble/curves/nist.js';
 import { sha256 } from '@noble/hashes/sha2';
 import { bytesToHex, concatBytes } from './hash.js';
+import type { AgentLimits } from './constants.js';
 
 export const AGENT_UID_RE = /^agent_[A-Za-z0-9_-]{22}$/;
 export function isAgentUid(uid: string): boolean {
@@ -89,6 +90,23 @@ export const AGENT_ERRORS = [
   'pairing_cancelled', 'feature_disabled',
 ] as const;
 export type AgentError = (typeof AGENT_ERRORS)[number];
+
+/** Where an account's agent numbers came from: its plan row, or the smallest
+ *  `maxAgentsPerMember` among the organizations it belongs to as a member or
+ *  guest. */
+export const AGENT_LIMIT_SOURCES = ['plan', 'enterprise'] as const;
+export type AgentLimitSource = (typeof AGENT_LIMIT_SOURCES)[number];
+export interface ResolvedAgentLimits extends AgentLimits {
+  source: AgentLimitSource;
+}
+
+/** Every refusal the owner routes can answer. `agent_limit` and `grant_limit`
+ *  arrive as 409 with the number that was full in `limit`. */
+export const AGENT_OWNER_ERRORS = [
+  'pairing_missing', 'pairing_cancelled', 'pairing_expired', 'code_mismatch',
+  'agent_limit', 'grant_limit', 'unknown_channel', 'unknown_agent',
+] as const;
+export type AgentOwnerError = (typeof AGENT_OWNER_ERRORS)[number];
 
 export const AGENT_ACTIVITY_KINDS = ['paired', 'send', 'direct_sent', 'direct_failed', 'grant_changed', 'revoked'] as const;
 export type AgentActivityKind = (typeof AGENT_ACTIVITY_KINDS)[number];

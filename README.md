@@ -145,7 +145,7 @@ ones marked *(server-side)* are enforced by the Zas server.
 - **Rate limited by the server**, on its own buckets, with the key-derivation
   budget charged to your account so ten agents are not ten times your own
   allowance *(server-side)*.
-- **Ten agents per account** *(server-side)*.
+- **As many agents as your plan or your organization allows** *(server-side)*.
 - **Files up to 5 GiB**, and in practice less: the agent reads a file into
   memory to hash it, so the machine's memory is the real ceiling.
 

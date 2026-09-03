@@ -113,6 +113,28 @@ export function channelLimitFor(plan: string | undefined): number | null {
   return CHANNEL_LIMITS[key];
 }
 
+/** How many agents an account may pair, revoked rows included, and how many
+ *  channels one agent may hold. `channels_per_agent: null` is no cap. The
+ *  server resolves which row applies (the plan, or an organization policy)
+ *  and tells the client through `GET /capabilities`; the client never reads
+ *  this table for an agent number. */
+export interface AgentLimits {
+  agents: number;
+  channels_per_agent: number | null;
+}
+
+export const AGENT_LIMITS: Record<string, AgentLimits> = {
+  anon: { agents: 0, channels_per_agent: 0 },
+  free: { agents: 2, channels_per_agent: 2 },
+};
+
+export function agentLimitsFor(plan: string | undefined): AgentLimits {
+  // Same fail-closed rule as channelLimitFor: an unrecognised plan gets the
+  // most restrictive real plan, never an open cap.
+  const key = plan && Object.prototype.hasOwnProperty.call(AGENT_LIMITS, plan) ? plan : 'free';
+  return AGENT_LIMITS[key];
+}
+
 /** Total bytes of live content a plan may hold. `null` means no cap.
  *  Counted per live item: the same file in two items counts twice. Manifests
  *  are encrypted, so the server only learns which blobs a link holds from the
