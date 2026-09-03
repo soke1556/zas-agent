@@ -25,8 +25,9 @@ scope to the channels you choose, and that you can revoke.
 
 ## What it does
 
-Your coding agent gets seven tools. It can send a file or a note into a channel
-you picked, list what is in that channel, and pull one item back onto disk.
+Your coding agent gets nine tools. It can send a file or a note into a channel
+you picked, send a file live through Directo, list what is in that channel,
+and pull one item back onto disk.
 Everything it sends is encrypted on your machine before it leaves, lands in your
 account, and is marked in the channel as sent by that agent. The agent has an
 identity of its own and never holds your account key: pairing mints a key pair
@@ -147,8 +148,11 @@ ones marked *(server-side)* are enforced by the Zas server.
   *(server-side)*.
 - **No reading unless the grant says so.** `read` is a separate switch from
   `send`; without it, `zas_list_items` and `zas_get_item` are refused.
-- **No sending into a view-only channel, and none into a channel in Directo
-  mode.** Both are refused before a byte is uploaded.
+- **No stored sending into a view-only channel, and none into a channel in
+  Directo mode.** Both are refused before a byte is uploaded. A channel in
+  Directo mode takes `zas_send_direct`, a live transfer that stores nothing.
+- **No receiving.** The agent sends through Directo; it never claims an
+  offer, so nothing can be pushed onto this machine through it.
 - **Nothing outside its allowlist.** The API refuses an agent on every route
   that is not on a short, explicit list, and Firestore rules refuse it your
   account document, your devices, and any channel without an active read grant
@@ -177,6 +181,13 @@ string ever reaches a terminal.
 | `read_forbidden` | This agent cannot read that channel. |
 | `direct_mode` | That channel is in Directo mode. |
 | `not_direct_mode` | That channel is not in Directo mode. |
+| `not_claimed` | Nobody received the file within ten minutes; the offer was withdrawn. |
+| `direct_cancelled` | The offer was cancelled from the receiving side. |
+| `direct_failed` | The Directo transfer failed in flight. |
+| `direct_not_failed` | That job is not a Directo send that failed in flight. |
+| `file_changed` | The file changed since the Directo offer. |
+| `webrtc_unavailable` | The WebRTC engine could not be loaded on this machine. |
+| `fallback_unavailable` | Reliable delivery is not available right now. |
 | `key_stale` | The channel key changed; the owner refreshes it by opening Zas. |
 | `quota_exceeded` | The account reached its storage limit. |
 | `rate_limited` | Too many sends in a row. |
@@ -207,18 +218,25 @@ stack trace.
 | `zas_pair` | Pairs this agent with a Zas account. The first call returns a URL for the owner to open; a later call says whether they approved. If the page shows a code, a call with `code` claims with it. In a profile that is already paired, approval replaces the old agent. |
 | `zas_send_file` | Sends a file from this machine into one of the owner's channels. Returns the item id, or a job id when the upload takes longer than a minute. |
 | `zas_send_note` | Sends a note — plain text, or a code snippet with its language — into one of the owner's channels. |
+| `zas_send_direct` | Sends a file through Directo: a live, device-to-device transfer into a channel in Directo mode. Nothing is stored. The owner presses Receive on another device within ten minutes; the call returns the result, or a job id after a minute. |
+| `zas_send_direct_fallback` | After a Directo send failed in flight, delivers the same file through reliable delivery: encrypted on this machine, stored in Cloudflare R2 for up to 24 hours, off the owner's quota. The owner's choice; the model is told to ask. |
 | `zas_list_items` | Lists the most recent items in one of the owner's channels. Needs a grant that includes reading. |
 | `zas_get_item` | Fetches one item. A note comes back as text; a file is written to disk. It never overwrites, so the path it answers with can differ from the one you asked for. |
-| `zas_jobs` | Lists the sends this server started, newest first, with the phase each one reached — and where a `job_id` from a long send is redeemed. |
+| `zas_jobs` | Lists the sends and Directo transfers this server started, newest first, with the phase each one reached — and where a `job_id` from a long send is redeemed. |
 
 `channel` takes a channel name or a channel id. A name has to match exactly one
-of the channels you granted; with exactly one grant, `zas_send_file` and
-`zas_send_note` can leave it out.
+of the channels you granted; with exactly one grant, `zas_send_file`,
+`zas_send_note` and `zas_send_direct` can leave it out.
+
+Directo needs a native module, [node-datachannel](https://github.com/murat-dogan/node-datachannel),
+WebRTC for Node. npm installs a prebuilt binary for Windows, macOS and Linux;
+the module loads the first time `zas_send_direct` runs, and a machine where it
+cannot load answers `webrtc_unavailable`. Every other tool works without it.
 
 Two things worth knowing before you point a model at your account:
 
-- `zas_send_file` sends any file this process can read — `~/.ssh/id_rsa` and a
-  `.env` included. Confirm with the owner before sending secrets, keys or
+- `zas_send_file` and `zas_send_direct` send any file this process can read —
+  `~/.ssh/id_rsa` and a `.env` included. Confirm with the owner before sending secrets, keys or
   credentials. Its tool description says so, so the model reads it too.
 - `zas_get_item` writes a new file under `dest`, or under the system temp
   directory when you leave `dest` out. It never overwrites an existing file: a

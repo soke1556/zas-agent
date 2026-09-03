@@ -3,10 +3,12 @@
 // seconds — so the work is started, waited on for a while, and then reported
 // as still running with an id the caller can ask about later.
 import { randomUUID } from 'node:crypto';
+import type { DirectJobPhase, DirectResult } from './direct.js';
 import { humanSentence, ZasError } from './errors.js';
 import type { SendPhase, SendResult } from './send.js';
 
-export type JobPhase = SendPhase;
+export type JobPhase = SendPhase | DirectJobPhase;
+export type JobResult = SendResult | DirectResult;
 
 /** Enough of the `ZasError` to build it again. A job's failure has to answer
  *  exactly as the same failure thrown from the call would — with the path in
@@ -25,13 +27,13 @@ export interface JobError {
 
 export interface Job {
   id: string;
-  kind: 'file' | 'note' | 'direct';
+  kind: 'file' | 'note' | 'direct' | 'fallback';
   title: string;
   channel: string;
   started_at: number;
   phase: JobPhase | null;
   status: 'running' | 'done' | 'failed';
-  result?: SendResult;
+  result?: JobResult;
   error?: JobError;
 }
 
@@ -63,7 +65,7 @@ export class JobRunner {
     kind: Job['kind'],
     title: string,
     channel: string,
-    work: (report: (phase: JobPhase) => void) => Promise<SendResult>,
+    work: (report: (phase: JobPhase) => void) => Promise<JobResult>,
   ): Job {
     const job: Job = {
       id: randomUUID(),

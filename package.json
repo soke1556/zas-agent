@@ -1,7 +1,7 @@
 {
   "name": "zas-agent",
-  "version": "0.3.0",
-  "description": "MCP server that lets a coding agent send files and notes into your Zas channels.",
+  "version": "0.4.0",
+  "description": "MCP server that lets a coding agent send files and notes into your Zas channels, and files through Directo.",
   "type": "module",
   "license": "MIT",
   "author": "Sebastian Fernandez Quezada",
@@ -50,6 +50,7 @@
     "@noble/hashes": "^1.8.0",
     "hash-wasm": "^4.12.0",
     "jimp": "^1.6.0",
+    "node-datachannel": "^0.33.2",
     "zod": "^3.25.76"
   },
   "devDependencies": {

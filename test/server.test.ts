@@ -195,9 +195,9 @@ describe('buildServer', () => {
 
   it('refuses every tool that needs an identity when the profile has none', async () => {
     const client = await connect(buildServer('nobody'));
-    for (const name of ['zas_send_file', 'zas_send_note', 'zas_list_items', 'zas_get_item']) {
+    for (const name of ['zas_send_file', 'zas_send_note', 'zas_list_items', 'zas_get_item', 'zas_send_direct', 'zas_send_direct_fallback']) {
       const refused = await call(client, name, {
-        path: 'x', text: 'x', channel: 'c1', id: 'abc',
+        path: 'x', text: 'x', channel: 'c1', id: 'abc', job: 'j',
       });
       expect(refused.isError, name).toBe(true);
       expect(refused.text, name).toContain('not_paired');
@@ -205,23 +205,37 @@ describe('buildServer', () => {
     await client.close();
   });
 
-  it('never claims a Directo channel can be sent to', async () => {
-    // `send.ts` refuses every send to a channel in Directo mode, so a status
-    // line that says “send” is the one place the package disagrees with
-    // itself. Reading stays true: Directo changes nothing about it.
+  it('names the Directo tool for a channel in Directo mode, and never plain send', async () => {
+    // `send.ts` refuses every stored send to a channel in Directo mode, so a
+    // status line that says a bare “send” is the one place the package would
+    // disagree with itself. Reading stays true: Directo changes nothing about it.
     const grants = [
       { ...grant('c3', workKey, 'Directo', true), direct_mode: true },
-      { ...grant('c4', draftKey, 'Silencio', false), direct_mode: true },
+      { ...grant('c4', draftKey, 'Silencio', false), direct_mode: true, send: false },
     ];
     const client = await connect(buildServer('p', {
       identity,
       client: fakeClient(async () => ({ grants })),
     }));
     const status = await call(client, 'zas_status');
-    expect(status.text).toContain('Directo · read');
-    expect(status.text).not.toContain('Directo · send');
+    expect(status.text).toContain('Directo · send (Directo) · read');
+    expect(status.text).not.toContain('Directo · send ·');
     expect(status.text).toContain('Silencio · no access');
-    expect(status.text).not.toContain('Silencio · send');
+    await client.close();
+  });
+
+  it('refuses a Directo send into a storage channel with the closed code, and a fallback for a job it does not hold', async () => {
+    const grants = [grant('c1', workKey, 'Trabajo', false)];
+    const client = await connect(buildServer('p', {
+      identity,
+      client: fakeClient(async () => ({ grants })),
+    }));
+    const direct = await call(client, 'zas_send_direct', { path: 'x.bin', channel: 'Trabajo' });
+    expect(direct.isError).toBe(true);
+    expect(direct.text).toBe(`not_direct_mode: ${humanSentence(new ZasError('not_direct_mode', 409))}`);
+    const fallback = await call(client, 'zas_send_direct_fallback', { job: 'no-such-job' });
+    expect(fallback.isError).toBe(true);
+    expect(fallback.text).toBe(`direct_not_failed: ${humanSentence(new ZasError('direct_not_failed', 0))}`);
     await client.close();
   });
 

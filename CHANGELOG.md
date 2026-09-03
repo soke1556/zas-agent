@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-03
+
+### Added
+
+- `zas_send_direct` sends a file through Directo: a live, device-to-device
+  transfer into a channel in Directo mode. Nothing is stored. The agent
+  offers, the owner presses Receive on another device within ten minutes,
+  and the bytes travel encrypted over WebRTC. The call returns the result,
+  or a job id after a minute; `zas_jobs` follows the phases `offer`,
+  `connecting`, `flight`, `finishing`.
+- `zas_send_direct_fallback` delivers the file of a Directo send that
+  failed in flight through reliable delivery: encrypted on this machine,
+  stored in Cloudflare R2 for up to 24 hours, off the owner's quota. It is
+  the owner's choice; the tool description tells the model to ask.
+- A native dependency: `node-datachannel`, WebRTC for Node. npm installs a
+  prebuilt binary; the module loads the first time `zas_send_direct` runs,
+  and a machine where it cannot load answers `webrtc_unavailable`.
+- New error codes: `not_claimed`, `direct_cancelled`, `direct_failed`,
+  `direct_not_failed`, `file_changed`, `webrtc_unavailable`,
+  `fallback_unavailable`.
+
+### Changed
+
+- `zas_status` says `send (Directo)` for a channel in Directo mode, where it
+  said nothing. `zas_send_file` still refuses such a channel.
+
 ## [0.3.0] - 2026-09-03
 
 ### Added

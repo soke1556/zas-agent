@@ -7,6 +7,11 @@ const RENAMES: Record<string, string> = {
   read_only: 'send_forbidden',
   unknown_channel: 'grant_missing',
   no_account: 'grant_missing',
+  // The Directo routes' words. `not_live` is an exchange that ended under the
+  // agent (expired, or cancelled from the receiving side); `direct_too_big`
+  // is the plan's Directo ceiling.
+  not_live: 'direct_cancelled',
+  direct_too_big: 'file_too_big',
 };
 
 export class ZasError extends Error {
@@ -73,6 +78,13 @@ const SENTENCES: Record<string, string> = {
   read_forbidden: 'This agent cannot read that channel.',
   direct_mode: 'That channel is in Directo mode. Use zas_send_direct.',
   not_direct_mode: 'That channel is not in Directo mode. Use zas_send_file.',
+  not_claimed: 'Nobody received the file within ten minutes. The offer was withdrawn.',
+  direct_cancelled: 'The offer was cancelled from the receiving side.',
+  direct_failed: 'The Directo transfer failed ({path}). Ask the owner before you use zas_send_direct_fallback.',
+  direct_not_failed: 'That job is not a Directo send that failed in flight.',
+  file_changed: 'The file changed since the Directo offer. Send it again.',
+  webrtc_unavailable: 'The WebRTC engine (node-datachannel) could not be loaded on this machine.',
+  fallback_unavailable: 'Reliable delivery is not available right now. Try again later.',
   key_stale: 'The channel key changed. The owner refreshes it by opening Zas.',
   quota_exceeded: 'The account reached its storage limit.',
   rate_limited: 'Too many sends in a row. Wait a moment.',

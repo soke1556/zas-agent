@@ -9,6 +9,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { normalizePairingCode } from './shared/agent.js';
 import { ZasClient } from './client.js';
+import { sendDirect, sendDirectFallback, type DirectDeps, type FailedDirect } from './direct.js';
 import { humanSentence, ZasError } from './errors.js';
 import { channelNameOf, grantsFor } from './grants.js';
 import { defaultEndpoints, loadIdentity, type Identity, type RemoteGrant } from './identity.js';
@@ -27,6 +28,8 @@ export interface ServerDeps {
    *  failed-then-retryable — can be driven offline. */
   runPair?: typeof runPair;
   announceMs?: number;
+  /** The Directo job's engine, file and clocks, for driving it offline. */
+  direct?: DirectDeps;
 }
 
 /** The version esbuild bakes in (see `build.mjs`). Absent under vitest and
@@ -64,11 +67,12 @@ interface Pairing {
 /** What the agent may do with one channel.
  *  `view` is a permission on the channel and outranks the grant's own `send`,
  *  so a channel the owner switched to view-only never claims it can send. A
- *  channel in Directo mode is the same story: `send.ts` refuses every send to
- *  one with `direct_mode`, so this line must not promise otherwise. */
+ *  channel in Directo mode takes a different tool: `send.ts` refuses every
+ *  stored send to one with `direct_mode`, and `direct.ts` refuses every
+ *  Directo send to one without, so the line names which. */
 function rightsOf(grant: RemoteGrant): string {
   const rights: string[] = [];
-  if (grant.send && grant.mode !== 'view' && !grant.direct_mode) rights.push('send');
+  if (grant.send && grant.mode !== 'view') rights.push(grant.direct_mode ? 'send (Directo)' : 'send');
   if (grant.read) rights.push('read');
   return rights.length > 0 ? rights.join(' · ') : 'no access';
 }
@@ -235,7 +239,7 @@ export function buildServer(profile: string, deps: ServerDeps = {}): McpServer {
   // ---- sending ----
 
   server.registerTool('zas_send_file', {
-    description: "Send a file from this machine into one of the owner's Zas channels. Returns the item id, or a job id when the upload takes longer than a minute. Sends any file this process can read; confirm with the owner before sending secrets, keys or credentials." + AGENT_CUE,
+    description: "Send a file from this machine into one of the owner's Zas channels. Returns the item id, or a job id when the upload takes longer than a minute. A channel in Directo mode refuses this tool: use zas_send_direct there. Sends any file this process can read; confirm with the owner before sending secrets, keys or credentials." + AGENT_CUE,
     inputSchema: {
       path: z.string().describe('Absolute or relative path of the file to send.'),
       channel: z.string().optional().describe('Channel name or id. Optional when the agent holds exactly one channel.'),
@@ -249,6 +253,63 @@ export function buildServer(profile: string, deps: ServerDeps = {}): McpServer {
         (report) => sendFile(c, input, report),
       );
       return settled(await runner.wait(job));
+    } catch (e) {
+      return failed(e);
+    }
+  });
+
+  // ---- Directo ----
+
+  /** The failed runs a fallback can still deliver, by job id. Bounded like the
+   *  job list: a record holds the channel key. */
+  const failedDirects = new Map<string, FailedDirect>();
+  const rememberFailed = (jobId: string, record: FailedDirect): void => {
+    failedDirects.set(jobId, record);
+    if (failedDirects.size > 50) failedDirects.delete(failedDirects.keys().next().value!);
+  };
+
+  server.registerTool('zas_send_direct', {
+    description: "Send a file from this machine through Directo: a live, device-to-device transfer into one of the owner's channels that is in Directo mode. Nothing is stored. The owner has to press Receive on another device within ten minutes; the call waits a minute and then returns a job id to check with zas_jobs. Returns the transfer result, or a job id. Sends any file this process can read; confirm with the owner before sending secrets, keys or credentials." + AGENT_CUE,
+    inputSchema: {
+      path: z.string().describe('Absolute or relative path of the file to send.'),
+      channel: z.string().optional().describe('Channel name or id. Optional when the agent holds exactly one channel.'),
+    },
+  }, async (input) => {
+    try {
+      const c = ctx();
+      // `job` is assigned before the work reaches its first await, and the
+      // callback runs long after: the closure reads the assigned value.
+      let job: ReturnType<JobRunner['start']>;
+      job = runner.start(
+        'direct', input.path, input.channel ?? '',
+        (report) => sendDirect(c, input, report, {
+          ...(deps.direct ?? {}),
+          onFailed: (record) => rememberFailed(job.id, record),
+        }),
+      );
+      return settled(await runner.wait(job));
+    } catch (e) {
+      return failed(e);
+    }
+  });
+
+  server.registerTool('zas_send_direct_fallback', {
+    description: 'After a zas_send_direct job failed in flight, deliver the same file through reliable delivery instead. Zas encrypts the file on this machine and stores only that encrypted copy in Cloudflare R2 for up to 24 hours; it uses none of the owner\'s space, and the device that claimed the offer can download it later. This stops being Directo: the encrypted bytes pass through storage. Ask the owner before you use it; it is their choice. Pass the failed job\'s id.' + AGENT_CUE,
+    inputSchema: {
+      job: z.string().describe('The job id zas_send_direct or zas_jobs reported for the Directo send that failed.'),
+    },
+  }, async (input) => {
+    try {
+      const c = ctx();
+      const record = failedDirects.get(input.job);
+      if (!record) return failed(new ZasError('direct_not_failed', 0));
+      const job = runner.start(
+        'fallback', record.name, record.channel_name,
+        (report) => sendDirectFallback(c, record, report, deps.direct),
+      );
+      const outcome = await runner.wait(job);
+      if (outcome.status === 'done') failedDirects.delete(input.job);
+      return settled(outcome);
     } catch (e) {
       return failed(e);
     }
@@ -311,7 +372,7 @@ export function buildServer(profile: string, deps: ServerDeps = {}): McpServer {
   // ---- jobs ----
 
   server.registerTool('zas_jobs', {
-    description: 'List the sends this server started, newest first, with the phase each one reached and how it ended — including any `job_id` a send returned; a finished job keeps its result here.' + AGENT_CUE,
+    description: 'List the sends and Directo transfers this server started, newest first, with the phase each one reached and how it ended — including any `job_id` a send returned; a finished job keeps its result here.' + AGENT_CUE,
   }, async () => text(runner.list()));
 
   return server;

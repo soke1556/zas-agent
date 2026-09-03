@@ -161,6 +161,18 @@ export class ZasClient {
       .map((row) => row.document);
   }
 
+  /** Firestore REST get of one document, `null` when it is not there. The
+   *  rules decide what an agent may read; here that is its own Directo offer,
+   *  which an offer's sender may read without a grant on the channel. */
+  async firestoreGet(path: string): Promise<Record<string, unknown> | null> {
+    const base = ZasClient.firestoreBase(this.identity.firestore_project);
+    const res = await this.authed(`${base}/${path}`, 'GET', undefined, {});
+    const parsed = await readBody(res);
+    if (res.status === 404) return null;
+    if (!res.ok) throw errorFromResponse(res.status, parsed);
+    return parsed as Record<string, unknown>;
+  }
+
   /** The web app's public config value. It identifies the project, it is not a secret. */
   static apiKey(): string {
     return process.env.ZAS_FIREBASE_API_KEY || 'AIzaSyAiZbAPrxH7EKaJftJoGcEVEL0h6rAVcvE';
