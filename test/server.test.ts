@@ -144,10 +144,10 @@ describe('buildServer', () => {
   });
 
   it('answers an unpaired profile with the sentence, not an error', async () => {
-    const client = await connect(buildServer('nobody'));
+    const client = await connect(buildServer('codex'));
     const status = await call(client, 'zas_status');
     expect(status.isError).toBe(false);
-    expect(status.text).toContain('zas-agent pair');
+    expect(status.text).toContain('zas-agent pair --profile codex');
     expect(status.text).not.toContain('not_paired');
     await client.close();
   });
@@ -194,13 +194,14 @@ describe('buildServer', () => {
   });
 
   it('refuses every tool that needs an identity when the profile has none', async () => {
-    const client = await connect(buildServer('nobody'));
+    const client = await connect(buildServer('codex'));
     for (const name of ['zas_send_file', 'zas_send_note', 'zas_list_items', 'zas_get_item']) {
       const refused = await call(client, name, {
         path: 'x', text: 'x', channel: 'c1', id: 'abc',
       });
       expect(refused.isError, name).toBe(true);
       expect(refused.text, name).toContain('not_paired');
+      expect(refused.text, name).toContain('zas-agent pair --profile codex');
     }
     await client.close();
   });

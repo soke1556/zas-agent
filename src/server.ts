@@ -17,7 +17,7 @@ import { openInBrowser } from './open.js';
 import { runPair } from './pair.js';
 import { getItem, listItems } from './read.js';
 import { sendFile, sendNote, type SendContext } from './send.js';
-import { kindForProfile, packageName } from './snippets.js';
+import { kindForProfile, packageName, pairSnippet } from './snippets.js';
 
 export interface ServerDeps {
   identity?: Identity;
@@ -97,9 +97,13 @@ export function buildServer(profile: string, deps: ServerDeps = {}): McpServer {
     }],
   });
 
+  const notPairedSentence = () =>
+    `This agent is not paired yet. Run “${pairSnippet(profile)}” in the terminal.`;
+
   const failed = (e: unknown) => {
     const err = e instanceof ZasError ? e : new ZasError('internal', 0, String(e));
-    return { isError: true, ...text(`${err.code}: ${humanSentence(err)}`) };
+    const sentence = err.code === 'not_paired' ? notPairedSentence() : humanSentence(err);
+    return { isError: true, ...text(`${err.code}: ${sentence}`) };
   };
 
   /** A job's own answer. `done` hands back the result; `failed` is reported the
@@ -129,7 +133,7 @@ export function buildServer(profile: string, deps: ServerDeps = {}): McpServer {
       // is a question, and the answer to it is not a failure. A damaged
       // identity file is a different thing and still reaches `failed` below.
       if (!(deps.identity ?? loadIdentity(profile))) {
-        return text(humanSentence(new ZasError('not_paired', 0)));
+        return text(notPairedSentence());
       }
       const c = ctx();
       const grants = await grantsFor(c.client, profile);
