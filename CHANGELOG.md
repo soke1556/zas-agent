@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-09-03
+
+### Fixed
+
+- `zas_receive_direct` could not connect. The WebRTC engine in Node reports
+  an empty description object where a browser reports none, and the
+  receiver read that as a stale connection restart, so it dropped the very
+  first offer: it never answered, and both ends waited out the thirty
+  second clock. 0.5.0 could not receive a file at all. It can now.
+
 ## [0.5.0] - 2026-09-03
 
 ### Added

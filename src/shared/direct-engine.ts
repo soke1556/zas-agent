@@ -160,6 +160,15 @@ export function pathFromStats(stats: RTCStatsReport): DirectPath | undefined {
   return pathOf(pair);
 }
 
+/** Whether this connection actually holds a remote description. A browser
+ *  answers `null` before one is set; node-datachannel answers `{ sdp: '' }`,
+ *  which is truthy. Reading the object alone made a receiver in Node take the
+ *  very first offer for a stale ICE restart and drop it, so the sdp is what
+ *  has to be read. */
+function hasRemoteDescription(pc: { remoteDescription: { sdp?: string } | null }): boolean {
+  return !!pc.remoteDescription?.sdp;
+}
+
 /** Everything the two engines share: phase discipline (terminal states are
  *  terminal, exactly like the offer doc's), the connect timeout, the
  *  disconnected grace, teardown, and the diag record the session narrates
@@ -206,7 +215,7 @@ function session(
       diag.ms = Date.now() - startedAt;
       diag.iceState = String(pc.iceConnectionState ?? '');
       diag.gatherState = String((pc as { iceGatheringState?: string }).iceGatheringState ?? '');
-      diag.hadRemoteDesc = !!pc.remoteDescription;
+      diag.hadRemoteDesc = hasRemoteDescription(pc);
       diag.turnUrlsConfigured = countTurnUrls(pc.getConfiguration().iceServers);
       onDiag?.(diag);
       onPhase(p);
@@ -741,8 +750,8 @@ export function startReceiver(opts: ReceiverOpts): DirectHandle {
       // First offer, or a mid-flight ICE restart from a sender whose path
       // died — `stable` means the last exchange finished, so a fresh offer
       // is a renegotiation, not glare.
-      if (msg.kind === 'offer' && (!pc.remoteDescription || pc.signalingState === 'stable')) {
-        const isRestart = !!pc.remoteDescription;
+      if (msg.kind === 'offer' && (!hasRemoteDescription(pc) || pc.signalingState === 'stable')) {
+        const isRestart = hasRemoteDescription(pc);
         const offerGeneration = msg.generation ?? (isRestart ? generation + 1 : 1);
         // An old offer can surface after a completed renegotiation because
         // the mailbox query intentionally has no ordering requirement.
