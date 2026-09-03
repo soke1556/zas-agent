@@ -35,7 +35,8 @@ export interface Pending {
   profile: string;
   pairing_id: string;
   poll_secret: string;
-  code: string;
+  /** Protocol 1 only: the code the terminal printed. A protocol-2 pairing has none. */
+  code?: string;
   fingerprint: string;
   expires_at: number;
   kind: AgentKind;
@@ -49,6 +50,9 @@ export interface Pending {
   oprf_base: string;
   firestore_project: string;
   created_at: number;
+  /** 2 when this process claims its own pairing; `port` is where it listens. */
+  protocol?: 2;
+  port?: number;
 }
 
 /** Exactly the rows `GET /v1/agents/me` returns under `grants`. The channel

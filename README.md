@@ -63,28 +63,37 @@ command = "npx"
 args = ["-y", "zas-agent", "--profile", "codex"]
 ```
 
-### What pairing prints
+### What pairing does
 
-`zas-agent pair` mints the key pair, registers the public halves, and waits. The
-terminal shows four things:
+`zas-agent pair` mints the key pair, registers the public halves, opens the
+approval page in your browser, and waits. The terminal shows:
 
 ```
 Open this page signed in to your Zas account:
-  https://zas.red/agents/pair?p=...
-Code:        ABCD-EFGH
+  https://zas.red/agents/pair?p=...#port=53211
 Fingerprint: 1a2b 3c4d 5e6f 7a8b
 Waiting for approval… (expires in 10 minutes)
 ```
 
-Open the link signed in to your Zas account. Check that the fingerprint on the
-page is the one in your terminal, name the agent, and tick the channels it may
-use — sending is the default, reading is a separate switch. The code is eight
-characters in two groups, and it is what you compare before you approve. The
-pairing is good for ten minutes; past that, run the command again.
+Signed in, name the agent and tick the channels it may use — sending is the
+default, reading is a separate switch — and approve. Approval creates
+nothing by itself: the page hands a one-time claim code to this terminal
+over `127.0.0.1` (the port in the link), and the agent exists only once the
+terminal claims with that code and the secret it holds. A link that reached
+somebody else is approved on their machine, where nothing listens, and
+expires with nothing created.
 
-You can also start the flow from the coding agent with the `zas_pair` tool: the
-first call hands back the URL and the code, and a later call says whether the
-approval landed.
+If the browser cannot reach the terminal — the link was opened on a phone,
+or the browser refused the local connection — the page shows the code and
+the terminal asks for it. Type it there and nowhere else: with that code,
+another terminal that started a pairing could claim it. Pass `--no-open` or
+set `ZAS_NO_OPEN=1` to keep the browser closed; the link is printed either
+way. The pairing is good for ten minutes before approval and five after;
+past that, run the command again.
+
+You can also start the flow from the coding agent with the `zas_pair` tool:
+the first call hands back the URL, a later call says whether the approval
+landed, and if the page shows a code, a call with `code` claims with it.
 
 ## Why you can trust it
 
@@ -98,9 +107,11 @@ source, the sentence says so.
   account key, and the key-derivation service refuses account-key derivation to
   an agent *(server-side)*.
 - **You approve it, and you choose the channels.** Pairing never
-  auto-approves. The approval page shows the harness, the host, the key
-  fingerprint and the code, and you compare the code with your terminal before
-  anything is granted.
+  auto-approves. The approval page shows the harness, the host and the key
+  fingerprint, and nothing exists until the terminal that started the
+  pairing claims it with a code only the approving page received
+  *(server-side)*. A pairing link sent to you by someone else creates
+  nothing on your account.
 - **It holds one key per granted channel, and no key for any other.** Each
   grant carries that channel's key sealed to the agent's X25519 public key. A
   channel you did not grant has no key here to decrypt with, and the server
@@ -193,7 +204,7 @@ stack trace.
 | Tool | What it does |
 | --- | --- |
 | `zas_status` | Says whether this machine is paired with a Zas account, and lists the owner's channels this agent may send to or read from. |
-| `zas_pair` | Pairs this machine with a Zas account. The first call returns a URL and a code for the owner to approve; a later call says whether they did. |
+| `zas_pair` | Pairs this machine with a Zas account. The first call returns a URL for the owner to open; a later call says whether they approved. If the page shows a code, a call with `code` claims with it. |
 | `zas_send_file` | Sends a file from this machine into one of the owner's channels. Returns the item id, or a job id when the upload takes longer than a minute. |
 | `zas_send_note` | Sends a note — plain text, or a code snippet with its language — into one of the owner's channels. |
 | `zas_list_items` | Lists the most recent items in one of the owner's channels. Needs a grant that includes reading. |
@@ -232,8 +243,8 @@ crash mid-write cannot leave half a file behind:
 
 - `identity.json` — the agent uid, the owner uid, the name, and the two key
   pairs. Back it up like a private key, or delete it and pair again.
-- `pending.json` — a pairing that has not been approved yet. Removed on
-  approval, and on a pairing that expired or was cancelled.
+- `pending.json` — a pairing that has not been claimed yet. Removed on
+  completion, and on a pairing that expired or was cancelled.
 - `grants.json` — a one-minute cache of `GET /v1/agents/me`: which channels,
   and the sealed key for each. The channel name stays encrypted here.
   Disposable.

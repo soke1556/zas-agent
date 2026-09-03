@@ -7,11 +7,13 @@
 // ask about later rather than a timeout.
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
+import { normalizePairingCode } from './shared/agent.js';
 import { ZasClient } from './client.js';
 import { humanSentence, ZasError } from './errors.js';
 import { channelNameOf, grantsFor } from './grants.js';
 import { defaultEndpoints, loadIdentity, type Identity, type RemoteGrant } from './identity.js';
 import { JobRunner } from './jobs.js';
+import { openInBrowser } from './open.js';
 import { runPair } from './pair.js';
 import { getItem, listItems } from './read.js';
 import { sendFile, sendNote, type SendContext } from './send.js';
@@ -55,6 +57,8 @@ interface Pairing {
   status: 'running' | 'paired' | 'failed';
   identity?: Identity;
   error?: unknown;
+  /** Set while runPair is waiting for a typed code; the next call with `code` answers it. */
+  ask: ((code: string) => void) | null;
 }
 
 /** What the agent may do with one channel.
@@ -155,10 +159,14 @@ export function buildServer(profile: string, deps: ServerDeps = {}): McpServer {
   let pairing: Pairing | null = null;
 
   server.registerTool('zas_pair', {
-    description: 'Pair this machine with a Zas account. The first call returns a URL and a code for the owner to approve; a later call says whether they did.' + AGENT_CUE,
-  }, async () => {
+    description: 'Pair this machine with a Zas account. The first call returns a URL for the owner to open; a later call says whether they approved. If the page shows a code, call again with `code`.' + AGENT_CUE,
+    inputSchema: {
+      code: z.string().optional().describe('The code the pairing page shows when the browser could not reach this machine.'),
+    },
+  }, async (input) => {
     if (!pairing) {
-      const state: Pairing = { logs: [], status: 'running' };
+      if (input.code !== undefined) return failed(new ZasError('pairing_not_approved', 409));
+      const state: Pairing = { logs: [], status: 'running', ask: null };
       pairing = state;
       // The promise is settled onto the state and never rethrown: an
       // unobserved rejection would take the whole MCP server down while the
@@ -171,6 +179,10 @@ export function buildServer(profile: string, deps: ServerDeps = {}): McpServer {
         // may have set the environment after this module was loaded.
         apiBase: defaultEndpoints().api_base,
         log: (line) => { state.logs.push(line); },
+        // The person cannot type into this process; the coding agent relays
+        // the code as an argument, and this promise is what it answers.
+        askCode: () => new Promise<string>((resolve) => { state.ask = resolve; }),
+        ...(process.env.ZAS_NO_OPEN === '1' ? {} : { open: openInBrowser }),
       }).then(
         (identity) => { state.status = 'paired'; state.identity = identity; },
         (error: unknown) => { state.status = 'failed'; state.error = error; },
@@ -193,6 +205,29 @@ export function buildServer(profile: string, deps: ServerDeps = {}): McpServer {
       const error = pairing.error;
       pairing = null;
       return failed(error);
+    }
+    if (input.code !== undefined) {
+      const state = pairing;
+      const ask = state.ask;
+      // No open question means the owner has not approved yet, or a claim is
+      // already in flight: either way there is nothing to answer with.
+      if (!ask) return failed(new ZasError('pairing_not_approved', 409));
+      state.ask = null;
+      ask(normalizePairingCode(input.code) || input.code);
+      // The claim is one request away. Wait for it to settle: paired, failed,
+      // or asked again — which is what a mismatch looks like from here.
+      const until = Date.now() + (deps.announceMs ?? PAIR_ANNOUNCE_MS);
+      while (state.status === 'running' && state.ask === null && Date.now() < until) {
+        await delay(10);
+      }
+      if (state.status === 'paired') return text(`paired as ${state.identity?.name ?? ''}`.trim());
+      if (state.status === 'failed') {
+        const error = state.error;
+        pairing = null;
+        return failed(error);
+      }
+      if (state.ask !== null) return failed(new ZasError('claim_mismatch', 403));
+      return text(['pending', ...state.logs].join('\n'));
     }
     return text(['pending', ...pairing.logs].join('\n'));
   });

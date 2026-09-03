@@ -8,11 +8,13 @@
 // exception is `--version`: it connects no transport, so its whole output is
 // the answer, and a caller piping it deserves it on stdout.
 import { realpathSync } from 'node:fs';
+import { createInterface, type Interface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { isAgentKind, type AgentKind } from './shared/agent.js';
 import { humanSentence, ZasError } from './errors.js';
 import { defaultEndpoints, PROFILE_RE } from './identity.js';
+import { openInBrowser } from './open.js';
 import { runPair } from './pair.js';
 import { agentVersion, buildServer } from './server.js';
 import { kindForProfile } from './snippets.js';
@@ -31,6 +33,8 @@ interface Parsed {
   unknown?: string;
   /** The line `invalid` prints before exiting 2. */
   message?: string;
+  /** `--no-open`, or the ZAS_NO_OPEN env var: do not launch a browser. */
+  noOpen?: boolean;
 }
 
 export function parseArgs(argv: string[]): Parsed {
@@ -56,10 +60,11 @@ export function parseArgs(argv: string[]): Parsed {
       // the owner cannot recognise in the list. It stops instead.
       if (!isAgentKind(kind)) return { ...parsed, command: 'help', unknown: `--kind ${kind}` };
       parsed.kind = kind;
+    } else if (name === '--no-open') parsed.noOpen = true;
     // A flag with nothing after it is not a blank host: `runPair` fills in
     // `hostname()` for `undefined`, and that name is how the owner recognises
     // the machine in the approval list.
-    } else if (name === '--host') parsed.host = take() || undefined;
+    else if (name === '--host') parsed.host = take() || undefined;
     else return { ...parsed, command: 'help', unknown: arg };
   }
   return parsed;
@@ -70,7 +75,7 @@ const USAGE = [
   '',
   '  zas-agent [--profile <name>]                serve the MCP tools over stdio',
   '  zas-agent pair [--profile <name>]           pair this machine with a Zas account',
-  '                 [--kind claude_code|codex|other] [--host <name>]',
+  '                 [--kind claude_code|codex|other] [--host <name>] [--no-open]',
   '  zas-agent --version',
 ].join('\n');
 
@@ -94,6 +99,16 @@ export async function main(argv: string[], log: (line: string) => void = (l) => 
   }
 
   if (args.command === 'pair') {
+    // A prompt only where somebody can answer it: an MCP client, a script or a
+    // pipe has no person on stdin, and a question there would hang forever.
+    let rl: Interface | null = null;
+    const askCode = process.stdin.isTTY
+      ? () => {
+          rl ??= createInterface({ input: process.stdin, output: process.stderr });
+          return new Promise<string>((resolve) => { rl!.question('Type the code shown in the browser: ', resolve); });
+        }
+      : undefined;
+    const noOpen = args.noOpen === true || process.env.ZAS_NO_OPEN === '1';
     try {
       await runPair({
         profile: args.profile,
@@ -102,11 +117,19 @@ export async function main(argv: string[], log: (line: string) => void = (l) => 
         webBase: process.env.ZAS_WEB_BASE || 'https://zas.red',
         apiBase: defaultEndpoints().api_base,
         log,
+        ...(askCode ? { askCode } : {}),
+        ...(noOpen ? {} : { open: openInBrowser }),
       });
     } catch (e) {
       const err = e instanceof ZasError ? e : new ZasError('internal', 0, String(e));
       log(humanSentence(err));
       return 1;
+    } finally {
+      // A question still open would hold stdin, and the process, forever.
+      // The cast works around TypeScript narrowing `rl` to `null` here: the
+      // only assignment it sees in this scope is the initializer, since the
+      // other one lives inside `askCode`'s closure.
+      (rl as Interface | null)?.close();
     }
     // `runPair`'s own last line already carries the install snippet for the
     // profile it paired and the kind it paired as; printing them again here

@@ -4,6 +4,11 @@
 // profile, a refusal, and the argument parsing behind the executable — so the
 // offline half of CI still covers `server.ts` and `cli.ts`.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+// A test must never open the person's real browser: `zas_pair` calls
+// `openInBrowser` for real unless this module is mocked out.
+vi.mock('../src/open.js', () => ({ openInBrowser: vi.fn() }));
+
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -16,6 +21,7 @@ import type { ZasClient } from '../src/client.js';
 import { humanSentence, ZasError } from '../src/errors.js';
 import { defaultEndpoints, newKeyMaterial, type Identity, type RemoteGrant } from '../src/identity.js';
 import { JobRunner } from '../src/jobs.js';
+import { openInBrowser } from '../src/open.js';
 import type { runPair } from '../src/pair.js';
 import type { SendResult } from '../src/send.js';
 import { agentVersion, buildServer } from '../src/server.js';
@@ -55,8 +61,8 @@ function fakeClient(api: (method: string, path: string) => Promise<unknown>): Za
 
 const PAIR_BLOCK = [
   'Open this page signed in to your Zas account:',
-  '  https://zas.red/agents/pair?p=p1',
-  'Code:        ABCD-EFGH',
+  '  https://zas.red/agents/pair?p=p1#port=53211',
+  'Fingerprint: 1a2b 3c4d 5e6f 7a8b',
   'Waiting for approval… (expires in 10 minutes)',
 ].join('\n');
 
@@ -66,14 +72,20 @@ const PAIR_BLOCK = [
 function fakePair() {
   let settle: { resolve: (value: Identity) => void; reject: (error: unknown) => void } | null = null;
   let started = 0;
-  const impl = ((opts: Parameters<typeof runPair>[0]) => {
+  let opts: Parameters<typeof runPair>[0] | null = null;
+  const impl = ((o: Parameters<typeof runPair>[0]) => {
     started += 1;
-    opts.log(PAIR_BLOCK);
+    opts = o;
+    o.log(PAIR_BLOCK);
+    o.open?.('https://zas.red/agents/pair?p=p1#port=53211');
     return new Promise<Identity>((resolve, reject) => { settle = { resolve, reject }; });
   }) as typeof runPair;
   return {
     impl,
     started: () => started,
+    /** What runPair does when the poll says approved: ask, and wait. */
+    askCode: () => opts!.askCode!(),
+    opened: () => opts?.open !== undefined,
     resolve: (value: Identity) => { settle!.resolve(value); },
     reject: (error: unknown) => { settle!.reject(error); },
   };
@@ -254,7 +266,7 @@ describe('buildServer', () => {
       const first = await call(client, 'zas_pair');
       expect(first.isError).toBe(false);
       expect(first.text).toContain('/agents/pair?p=p1');
-      expect(first.text).toContain('ABCD-EFGH');
+      expect(first.text).not.toContain('Code:');
       expect(first.text).toContain('Waiting for approval');
 
       const second = await call(client, 'zas_pair');
@@ -297,6 +309,60 @@ describe('buildServer', () => {
       expect(pair.started()).toBe(2);
       await client.close();
     });
+
+    it('takes the code the page shows: refused before approval, a mismatch reported once, then paired', async () => {
+      const pair = fakePair();
+      const client = await connect(buildServer('p', { runPair: pair.impl, announceMs: 50 }));
+      await call(client, 'zas_pair');
+
+      const early = await call(client, 'zas_pair', { code: 'ABCD-EFGH' });
+      expect(early.isError).toBe(true);
+      expect(early.text).toContain('pairing_not_approved');
+
+      // The poll said approved: runPair asks for a code and waits.
+      const typed = pair.askCode();
+      const wrong = call(client, 'zas_pair', { code: 'ABCD2345' });
+      expect(await typed).toBe('ABCD2345');
+      // A mismatch: runPair asks again, and the tool reads that as the answer.
+      const again = pair.askCode();
+      const mismatch = await wrong;
+      expect(mismatch.isError).toBe(true);
+      expect(mismatch.text).toContain('claim_mismatch');
+      expect(mismatch.text).toContain('The code does not match');
+
+      const right = call(client, 'zas_pair', { code: 'abcd-efgh' });
+      // normalizePairingCode drops the hyphen and upper-cases: what askCode
+      // resolves with is the canonical form, not the string as typed.
+      expect(await again).toBe('ABCDEFGH');
+      pair.resolve({ ...identity, name: 'Claude Code' });
+      expect((await right).text).toBe('paired as Claude Code');
+      expect(pair.started()).toBe(1);
+      await client.close();
+    });
+
+    it('opens the browser unless ZAS_NO_OPEN is set', async () => {
+      const pair = fakePair();
+      const client = await connect(buildServer('p', { runPair: pair.impl, announceMs: 10 }));
+      await call(client, 'zas_pair');
+      expect(pair.opened()).toBe(true);
+      expect(vi.mocked(openInBrowser)).toHaveBeenCalledWith('https://zas.red/agents/pair?p=p1#port=53211');
+      await client.close();
+
+      const callsBeforeNoOpen = vi.mocked(openInBrowser).mock.calls.length;
+      process.env.ZAS_NO_OPEN = '1';
+      try {
+        const quiet = fakePair();
+        const second = await connect(buildServer('p', { runPair: quiet.impl, announceMs: 10 }));
+        await call(second, 'zas_pair');
+        expect(quiet.opened()).toBe(false);
+        // ZAS_NO_OPEN=1: server.ts never hands `open` to runPair, so the real
+        // browser opener is not called again.
+        expect(vi.mocked(openInBrowser)).toHaveBeenCalledTimes(callsBeforeNoOpen);
+        await second.close();
+      } finally {
+        delete process.env.ZAS_NO_OPEN;
+      }
+    });
   });
 
   it('lists the jobs the runner holds', async () => {
@@ -334,5 +400,10 @@ describe('parseArgs', () => {
   it('stops on a kind it does not know instead of guessing "other"', () => {
     expect(parseArgs(['pair', '--kind', 'vscode'])).toMatchObject({ command: 'help', unknown: '--kind vscode' });
     expect(parseArgs(['--nope'])).toMatchObject({ command: 'help', unknown: '--nope' });
+  });
+
+  it('reads --no-open', () => {
+    expect(parseArgs(['pair', '--no-open'])).toMatchObject({ command: 'pair', noOpen: true });
+    expect(parseArgs(['pair'])).not.toHaveProperty('noOpen');
   });
 });

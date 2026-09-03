@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-09-03
+
+### Changed
+
+- Pairing no longer prints a code to type. The terminal listens on
+  `127.0.0.1`, the approval page hands it a one-time claim code, and the
+  agent is created only when the terminal claims. A page that cannot reach
+  the terminal shows the code, and the terminal asks for it. `pair` opens
+  the browser; `--no-open` and `ZAS_NO_OPEN=1` keep it closed.
+- `zas_pair` takes an optional `code` for the case where the page shows one.
+- Older servers are not supported by this release: the claim route is
+  required. Older CLIs keep working against the server.
+
 ## [0.1.1] - 2026-09-02
 
 ### Changed

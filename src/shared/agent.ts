@@ -29,6 +29,38 @@ export const AGENT_GRANT_ENVELOPE_BYTES = 108;
 
 export const AGENT_CHALLENGE_DOMAIN = 'ZAS-AGENT-CHALLENGE-V1';
 
+/** No 0/O, no 1/I/L: a person reads this code off one screen and types it
+ *  into another, so the alphabet is the one where that cannot go wrong. The
+ *  server mints from it, the page shows it, the CLI takes a typed one. */
+export const AGENT_PAIRING_CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+export const AGENT_PAIRING_CODE_LENGTH = 8;
+/** What a CLI that claims its own pairing announces at creation. */
+export const AGENT_PAIRING_PROTOCOL = 2;
+/** How long an approved protocol-2 pairing waits for its claim. */
+export const AGENT_CLAIM_TTL_MS = 5 * 60 * 1000;
+/** Wrong claim codes before the pairing is cancelled. */
+export const AGENT_CLAIM_ATTEMPTS = 5;
+
+/** Upper case, alphabet characters only, no length rule: what a field shows
+ *  while the person is still typing. A character outside the alphabet is not
+ *  corrected to a lookalike, it is dropped. */
+export function keepPairingCodeChars(raw: string): string {
+  return raw.toUpperCase().split('').filter((c) => AGENT_PAIRING_CODE_ALPHABET.includes(c)).join('');
+}
+
+/** Whatever was typed becomes the code, or nothing at all. Spaces, the display
+ *  hyphen and case are noise; the length check refuses the whole entry rather
+ *  than guessing at a different code. */
+export function normalizePairingCode(raw: unknown): string {
+  if (typeof raw !== 'string') return '';
+  const kept = keepPairingCodeChars(raw);
+  return kept.length === AGENT_PAIRING_CODE_LENGTH ? kept : '';
+}
+
+export function formatPairingCode(code: string): string {
+  return `${code.slice(0, 4)}-${code.slice(4)}`;
+}
+
 const text = new TextEncoder();
 
 function field(bytes: Uint8Array): Uint8Array {
@@ -88,6 +120,9 @@ export const AGENT_ERRORS = [
   'direct_mode', 'not_direct_mode',
   'key_stale', 'quota_exceeded', 'rate_limited', 'file_too_big', 'duplicate', 'pairing_expired',
   'pairing_cancelled', 'feature_disabled',
+  // The claim step: a wrong code, a claim before the owner approved, a claim
+  // of a pairing already claimed.
+  'claim_mismatch', 'pairing_not_approved', 'pairing_claimed',
 ] as const;
 export type AgentError = (typeof AGENT_ERRORS)[number];
 
@@ -105,6 +140,8 @@ export interface ResolvedAgentLimits extends AgentLimits {
 export const AGENT_OWNER_ERRORS = [
   'pairing_missing', 'pairing_cancelled', 'pairing_expired', 'code_mismatch',
   'agent_limit', 'grant_limit', 'unknown_channel', 'unknown_agent',
+  // A protocol-2 pairing approved once: the claim code is not minted twice.
+  'pairing_approved',
 ] as const;
 export type AgentOwnerError = (typeof AGENT_OWNER_ERRORS)[number];
 

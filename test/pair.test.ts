@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { pairUrl, runPair } from '../src/pair.js';
+import { pairUrl, runPair, webOriginOf } from '../src/pair.js';
 import { loadIdentity, loadPending, saveIdentity, newKeyMaterial, defaultEndpoints, type Identity } from '../src/identity.js';
 import { verifyAgentChallenge } from '../src/shared/agent.js';
 import { b64ToBytes } from '../src/shared/hash.js';
@@ -17,12 +17,15 @@ const PROFILE = 'mi-agente';
  *  two public pairing routes. The pairing key material is minted inside
  *  runPair, so the challenge/token handlers capture the P-256 key the
  *  pairing POST actually sent instead of assuming one ahead of time. */
-function fakeFetch(pollAnswers: Array<Record<string, unknown>>, pollStatuses: number[] = []) {
+function fakeFetch(pollAnswers: Array<Record<string, unknown>>, pollStatuses: number[] = [], claimTransportFailures = 0) {
   const calls: string[] = [];
   const pollHeaders: string[] = [];
+  const createBodies: Record<string, unknown>[] = [];
+  const claims: { secret: string; code: string }[] = [];
   let capturedP256Public = '';
   let capturedX25519Public = '';
   let pollIndex = 0;
+  let claimAttempts = 0;
   const json = (status: number, value: unknown) =>
     new Response(JSON.stringify(value), { status, headers: { 'content-type': 'application/json' } });
 
@@ -35,11 +38,12 @@ function fakeFetch(pollAnswers: Array<Record<string, unknown>>, pollStatuses: nu
     if (url.endsWith('/v1/agents/pairings')) {
       capturedP256Public = String(body.p256_public);
       capturedX25519Public = String(body.x25519_public);
+      createBodies.push(body);
       return json(201, {
         pairing_id: 'p1',
-        code: 'ABCDEFGH',
         poll_secret: 'f'.repeat(64),
         expires_at: NOW + 10 * 60 * 1000,
+        protocol: 2,
         fingerprint: 'ab12cd34ef567890' + '0'.repeat(48),
       });
     }
@@ -50,6 +54,17 @@ function fakeFetch(pollAnswers: Array<Record<string, unknown>>, pollStatuses: nu
       const status = pollStatuses[Math.min(pollIndex, pollStatuses.length - 1)] ?? 200;
       pollIndex += 1;
       return json(status, answer);
+    }
+    if (url.endsWith('/v1/agents/pairings/p1/claim')) {
+      claimAttempts += 1;
+      // A transport failure, not a server answer: no status code, no body —
+      // exactly what a dropped connection or a DNS failure looks like to
+      // `apiPublic`, and unlike every other branch here, not a `Response`.
+      if (claimAttempts <= claimTransportFailures) throw new TypeError('fetch failed');
+      const headers = (init?.headers ?? {}) as Record<string, string>;
+      claims.push({ secret: headers['X-Zas-Poll-Secret'], code: String(body.code) });
+      if (body.code === 'ABCDEFGH') return json(200, { status: 'claimed', agent_uid: AGENT_UID, owner_uid: 'owner-1' });
+      return json(403, { error: 'claim_mismatch', attempts_left: 4 });
     }
     if (url.endsWith('/v1/agents/challenge')) {
       return json(200, { challenge_id: 'ch1', nonce: Buffer.alloc(32, 3).toString('base64') });
@@ -75,7 +90,11 @@ function fakeFetch(pollAnswers: Array<Record<string, unknown>>, pollStatuses: nu
     return json(404, { error: 'not_found' });
   });
 
-  return { fetchImpl, calls, pollHeaders, x25519Public: () => capturedX25519Public };
+  return {
+    fetchImpl, calls, pollHeaders, createBodies, claims,
+    x25519Public: () => capturedX25519Public,
+    claimAttempts: () => claimAttempts,
+  };
 }
 
 describe('runPair', () => {
@@ -83,8 +102,19 @@ describe('runPair', () => {
   beforeEach(() => { home = mkdtempSync(join(tmpdir(), 'zas-agent-pair-')); process.env.ZAS_AGENT_HOME = home; });
   afterEach(() => { delete process.env.ZAS_AGENT_HOME; rmSync(home, { recursive: true, force: true }); });
 
+  /** The base options every new test starts from. */
+  const baseOpts = (f: ReturnType<typeof fakeFetch>, logLines: string[]) => ({
+    profile: PROFILE,
+    kind: 'claude_code' as const,
+    webBase: 'https://zas.red',
+    apiBase: 'https://zas.red/api',
+    fetch: f.fetchImpl as unknown as typeof fetch,
+    log: (line: string) => logLines.push(line),
+    now: () => NOW,
+  });
+
   it('prints the pairing block, keeps a pending file until approval, then saves the identity', async () => {
-    const f = fakeFetch([{ status: 'pending' }, { status: 'pending' }, { status: 'approved', agent_uid: AGENT_UID, owner_uid: 'owner-1' }]);
+    const f = fakeFetch([{ status: 'pending' }, { status: 'pending' }, { status: 'claimed', agent_uid: AGENT_UID, owner_uid: 'owner-1' }]);
     const logLines: string[] = [];
     const sleepCalls: number[] = [];
     let checkedPendingDuringPoll = false;
@@ -112,11 +142,15 @@ describe('runPair', () => {
       sleep,
       log: (line) => logLines.push(line),
       now: () => NOW,
+      listen: false,
     });
 
     const combined = logLines.join('\n');
     expect(combined).toContain(pairUrl('https://zas.red', 'p1'));
-    expect(combined).toContain('ABCD-EFGH');
+    // The pairing announcement itself carries no bare code line; "Add it to
+    // Claude Code:" further down the log is a different string that happens
+    // to share the substring "Code:", so the check is scoped to that block.
+    expect(logLines[0]).not.toContain('Code:');
     expect(combined).toContain('ab12 cd34 ef56 7890');
     expect(combined).toContain('expires in 10 minutes');
     expect(combined).toContain('Done: the agent “Claude Code” is paired with your account.');
@@ -128,6 +162,7 @@ describe('runPair', () => {
 
     expect(f.pollHeaders).toEqual(['f'.repeat(64), 'f'.repeat(64), 'f'.repeat(64)]);
     expect(sleepCalls).toEqual([2000, 2000]);
+    expect(f.createBodies[0]).toMatchObject({ claim: true });
 
     expect(identity.agent_uid).toBe(AGENT_UID);
     expect(identity.owner_uid).toBe('owner-1');
@@ -148,6 +183,7 @@ describe('runPair', () => {
       sleep: vi.fn(async () => {}),
       log: (line) => logLines.push(line),
       now: () => NOW,
+      listen: false,
     })).rejects.toMatchObject({ code: 'pairing_expired' });
 
     expect(loadIdentity('claude-code')).toBeNull();
@@ -161,7 +197,7 @@ describe('runPair', () => {
     };
     saveIdentity('claude-code', existing);
 
-    const f = fakeFetch([{ status: 'approved', agent_uid: AGENT_UID, owner_uid: 'owner-1' }]);
+    const f = fakeFetch([{ status: 'claimed', agent_uid: AGENT_UID, owner_uid: 'owner-1' }]);
     const logLines: string[] = [];
     const identity = await runPair({
       profile: 'claude-code',
@@ -172,6 +208,7 @@ describe('runPair', () => {
       sleep: vi.fn(async () => {}),
       log: (line) => logLines.push(line),
       now: () => NOW,
+      listen: false,
     });
 
     const warnLines = logLines.filter((l) => l.includes('is already paired'));
@@ -189,7 +226,7 @@ describe('runPair', () => {
     const f = fakeFetch(
       [
         { error: 'rate_limited', retry_after_ms: 25 },
-        { status: 'approved', agent_uid: AGENT_UID, owner_uid: 'owner-1' },
+        { status: 'claimed', agent_uid: AGENT_UID, owner_uid: 'owner-1' },
       ],
       [429, 200],
     );
@@ -203,6 +240,7 @@ describe('runPair', () => {
       sleep: vi.fn(async (ms: number) => { sleepCalls.push(ms); }),
       log: () => {},
       now: () => NOW,
+      listen: false,
     });
 
     expect(sleepCalls).toEqual([25]);
@@ -212,7 +250,7 @@ describe('runPair', () => {
 
   it('falls back to ten seconds when a rate-limited poll names no wait', async () => {
     const f = fakeFetch(
-      [{ error: 'rate_limited' }, { status: 'approved', agent_uid: AGENT_UID, owner_uid: 'owner-1' }],
+      [{ error: 'rate_limited' }, { status: 'claimed', agent_uid: AGENT_UID, owner_uid: 'owner-1' }],
       [429, 200],
     );
     const sleepCalls: number[] = [];
@@ -225,6 +263,7 @@ describe('runPair', () => {
       sleep: vi.fn(async (ms: number) => { sleepCalls.push(ms); }),
       log: () => {},
       now: () => NOW,
+      listen: false,
     });
     expect(sleepCalls).toEqual([10_000]);
   });
@@ -246,6 +285,7 @@ describe('runPair', () => {
       sleep: vi.fn(async () => { clock = NOW + 11 * 60 * 1000; }),
       log: () => {},
       now: () => clock,
+      listen: false,
     })).rejects.toMatchObject({ code: 'pairing_expired' });
     expect(f.fetchImpl.mock.calls.filter(([u]) => String(u).endsWith('/poll')).length).toBe(2);
     expect(loadIdentity('claude-code')).toBeNull();
@@ -262,11 +302,120 @@ describe('runPair', () => {
       sleep: vi.fn(async () => {}),
       log: () => {},
       now: () => NOW,
+      listen: false,
     })).rejects.toBeInstanceOf(Error);
     expect(loadIdentity('claude-code')).toBeNull();
   });
 
   it('builds the pairing URL from the web base and pairing id', () => {
     expect(pairUrl('https://zas.red', 'abc123')).toBe('https://zas.red/agents/pair?p=abc123');
+  });
+
+  it('listens on loopback, puts the port in the link, takes the claim from the page and closes', async () => {
+    const f = fakeFetch([{ status: 'pending' }]);
+    const logLines: string[] = [];
+    const run = runPair({ ...baseOpts(f, logLines), sleep: (ms) => new Promise((r) => setTimeout(r, Math.min(ms, 5))) });
+    // The link is printed once the listener is up.
+    while (!logLines.join('\n').includes('#port=')) await new Promise((r) => setTimeout(r, 5));
+    const port = Number(/#port=(\d+)/.exec(logLines.join('\n'))![1]);
+    expect(port).toBeGreaterThan(0);
+    expect(loadPending(PROFILE)).toMatchObject({ protocol: 2, port });
+
+    const answer = await fetch(`http://127.0.0.1:${port}/claim`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', origin: 'https://zas.red' },
+      body: JSON.stringify({ pairing_id: 'p1', code: 'ABCDEFGH' }),
+    });
+    expect(answer.status).toBe(200);
+    expect(await answer.json()).toEqual({ status: 'claimed' });
+
+    const identity = await run;
+    expect(identity.agent_uid).toBe(AGENT_UID);
+    expect(f.claims).toEqual([{ secret: 'f'.repeat(64), code: 'ABCDEFGH' }]);
+    expect(loadPending(PROFILE)).toBeNull();
+    expect(logLines.join('\n')).toContain('Done: the agent “Claude Code” is paired with your account.');
+    // The listener went with the pairing.
+    await expect(fetch(`http://127.0.0.1:${port}/claim`, { method: 'POST' })).rejects.toThrow();
+  });
+
+  it('answers a transport failure over loopback as a real HTTP status, then finishes over a typed code', async () => {
+    // The claim listener takes exactly one attempt from the page, success or
+    // not (`claim-listener.test.ts` pins that), so a transport failure on
+    // that one attempt burns the loopback door — the page falls back to
+    // showing the code, and the person types the one the pairing already
+    // printed. The gate below forces that ordering deterministically: the
+    // typed retry cannot reach `claimOnce` until this test's own loopback
+    // POST has already been answered, so the fake fetch's claim route sees
+    // the failing attempt first and the succeeding one second, never raced.
+    const f = fakeFetch([{ status: 'pending' }, { status: 'approved' }], [], 1);
+    const logLines: string[] = [];
+    let releaseAskCode: () => void = () => {};
+    const askCodeGate = new Promise<void>((resolve) => { releaseAskCode = resolve; });
+    const askCode = vi.fn(async () => { await askCodeGate; return 'ABCD-EFGH'; });
+    const run = runPair({
+      ...baseOpts(f, logLines),
+      sleep: (ms) => new Promise((r) => setTimeout(r, Math.min(ms, 5))),
+      askCode,
+    });
+    while (!logLines.join('\n').includes('#port=')) await new Promise((r) => setTimeout(r, 5));
+    const port = Number(/#port=(\d+)/.exec(logLines.join('\n'))![1]);
+
+    const answer = await fetch(`http://127.0.0.1:${port}/claim`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', origin: 'https://zas.red' },
+      body: JSON.stringify({ pairing_id: 'p1', code: 'ABCDEFGH' }),
+    });
+    // Before the fix this was HTTP 0: `res.writeHead(0, ...)` throws
+    // `RangeError [ERR_HTTP_INVALID_STATUS_CODE]` inside the request handler,
+    // an unhandled rejection that kills the CLI without answering the page.
+    expect(answer.status).toBe(502);
+    expect(await answer.json()).toEqual({ error: 'network' });
+
+    releaseAskCode();
+    const identity = await run;
+    expect(identity.agent_uid).toBe(AGENT_UID);
+    expect(askCode).toHaveBeenCalled();
+    expect(f.claimAttempts()).toBe(2);
+    expect(f.claims).toEqual([{ secret: 'f'.repeat(64), code: 'ABCDEFGH' }]);
+  });
+
+  it('asks for the code once the poll says approved, asks again on a mismatch, and finishes on the right one', async () => {
+    const f = fakeFetch([{ status: 'pending' }, { status: 'approved' }]);
+    const logLines: string[] = [];
+    const typed = ['ABCD-2345', 'abcd-efgh'];
+    const askCode = vi.fn(async () => typed.shift() ?? '');
+    const identity = await runPair({ ...baseOpts(f, logLines), sleep: async () => {}, askCode, listen: false });
+    expect(askCode).toHaveBeenCalledTimes(2);
+    expect(f.claims).toEqual([
+      { secret: 'f'.repeat(64), code: 'ABCD2345' },
+      { secret: 'f'.repeat(64), code: 'ABCDEFGH' },
+    ]);
+    expect(logLines.join('\n')).toContain('The code does not match');
+    expect(logLines.join('\n')).not.toContain('#port=');
+    expect(identity.owner_uid).toBe('owner-1');
+  });
+
+  it('says so once when it cannot take a code, and still finishes when the poll says claimed', async () => {
+    const f = fakeFetch([{ status: 'approved' }, { status: 'approved' }, { status: 'claimed', agent_uid: AGENT_UID, owner_uid: 'owner-1' }]);
+    const logLines: string[] = [];
+    await runPair({ ...baseOpts(f, logLines), sleep: async () => {}, listen: false });
+    const said = logLines.filter((l) => l.includes('This terminal cannot take a code.'));
+    expect(said).toHaveLength(1);
+    expect(f.claims).toEqual([]);
+  });
+
+  it('opens the link once when asked to, and never otherwise', async () => {
+    const f = fakeFetch([{ status: 'claimed', agent_uid: AGENT_UID, owner_uid: 'owner-1' }]);
+    const open = vi.fn();
+    await runPair({ ...baseOpts(f, []), sleep: async () => {}, listen: false, open });
+    expect(open).toHaveBeenCalledTimes(1);
+    expect(open).toHaveBeenCalledWith(pairUrl('https://zas.red', 'p1'));
+  });
+
+  it('builds the link with and without a port, and the origin from the web base', () => {
+    expect(pairUrl('https://zas.red', 'p1', 53211)).toBe('https://zas.red/agents/pair?p=p1#port=53211');
+    expect(pairUrl('https://zas.red', 'p1')).toBe('https://zas.red/agents/pair?p=p1');
+    expect(webOriginOf('https://zas.red/')).toBe('https://zas.red');
+    expect(webOriginOf('http://localhost:5199/app')).toBe('http://localhost:5199');
   });
 });
