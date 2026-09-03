@@ -23,12 +23,17 @@ export function pairSnippet(profile: string): string {
   return `npx -y ${packageName()} pair --profile ${profile}`;
 }
 
+// The separator is quoted on purpose. On Windows the npm install of `claude`
+// and `codex` is a PowerShell script shim, and PowerShell keeps a bare `--`
+// for itself, so the CLI saw `-y` as its own option and refused it
+// ("unknown option '-y'"). A quoted "--" reaches the CLI in PowerShell,
+// bash, zsh and cmd alike.
 export function claudeSnippet(profile: string): string {
-  return `claude mcp add zas -- npx -y ${packageName()} --profile ${profile}`;
+  return `claude mcp add zas "--" npx -y ${packageName()} --profile ${profile}`;
 }
 
 export function codexSnippet(profile: string): string {
-  return `codex mcp add zas -- npx -y ${packageName()} --profile ${profile}`;
+  return `codex mcp add zas "--" npx -y ${packageName()} --profile ${profile}`;
 }
 
 export function kindForProfile(profile: string): AgentKind {

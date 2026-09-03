@@ -154,8 +154,8 @@ describe('runPair', () => {
     expect(combined).toContain('ab12 cd34 ef56 7890');
     expect(combined).toContain('expires in 10 minutes');
     expect(combined).toContain('Done: the agent “Claude Code” is paired with your account.');
-    expect(combined).toContain(`claude mcp add zas -- npx -y zas-agent --profile ${PROFILE}`);
-    expect(combined).toContain(`codex mcp add zas -- npx -y zas-agent --profile ${PROFILE}`);
+    expect(combined).toContain(`claude mcp add zas "--" npx -y zas-agent --profile ${PROFILE}`);
+    expect(combined).toContain(`codex mcp add zas "--" npx -y zas-agent --profile ${PROFILE}`);
     expect(combined).not.toContain('[mcp_servers.zas]');
     expect(combined).not.toContain('--profile claude-code');
     expect(combined).toContain('Or to Codex:');

@@ -3,7 +3,7 @@
   "name": "io.github.soke1556/zas-agent",
   "title": "Zas",
   "description": "Send files and notes from a coding agent into your Zas channels, encrypted on your machine.",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "websiteUrl": "https://zas.red",
   "repository": {
     "url": "https://github.com/soke1556/zas-agent",
@@ -14,7 +14,7 @@
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "zas-agent",
-      "version": "0.2.0",
+      "version": "0.2.1",
       "runtimeHint": "npx",
       "transport": {
         "type": "stdio"

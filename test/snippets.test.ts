@@ -9,17 +9,17 @@ describe('snippets', () => {
   });
 
   it('builds the Claude Code install line', () => {
-    expect(claudeSnippet('claude-code')).toBe('claude mcp add zas -- npx -y zas-agent --profile claude-code');
-    expect(claudeSnippet('codex')).toBe('claude mcp add zas -- npx -y zas-agent --profile codex');
+    expect(claudeSnippet('claude-code')).toBe('claude mcp add zas "--" npx -y zas-agent --profile claude-code');
+    expect(claudeSnippet('codex')).toBe('claude mcp add zas "--" npx -y zas-agent --profile codex');
   });
 
   it('builds the Codex install line', () => {
     // `codex mcp add` writes ~/.codex/config.toml itself. One line a person
     // pastes beats a toml block a person edits, and it is the same shape as
     // the Claude Code line beside it.
-    expect(codexSnippet('codex')).toBe('codex mcp add zas -- npx -y zas-agent --profile codex');
+    expect(codexSnippet('codex')).toBe('codex mcp add zas "--" npx -y zas-agent --profile codex');
     expect(codexSnippet('claude-code')).toBe(
-      'codex mcp add zas -- npx -y zas-agent --profile claude-code',
+      'codex mcp add zas "--" npx -y zas-agent --profile claude-code',
     );
   });
 

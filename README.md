@@ -46,13 +46,13 @@ npx -y zas-agent pair --profile claude-code
 **Claude Code**
 
 ```
-claude mcp add zas -- npx -y zas-agent --profile claude-code
+claude mcp add zas "--" npx -y zas-agent --profile claude-code
 ```
 
 **Codex**
 
 ```
-codex mcp add zas -- npx -y zas-agent --profile codex
+codex mcp add zas "--" npx -y zas-agent --profile codex
 ```
 
 Codex by hand, if you would rather edit `~/.codex/config.toml`:
