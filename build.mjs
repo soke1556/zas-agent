@@ -4,7 +4,7 @@
 // to learn which files the bundle actually reads. Two copies of these options
 // would drift, and the export would then mirror a different set of files than
 // the one npm publishes.
-import { readFileSync } from 'node:fs';
+import { chmodSync, readFileSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { build } from 'esbuild';
 
@@ -36,4 +36,8 @@ export function buildOptions(root = AGENT_DIR) {
 // Only when this file is the program. Importing it must not write dist/.
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   await build(buildOptions());
+  // esbuild writes 0644, and this file is a `bin`: run straight from a clone,
+  // or through a symlink to it, the shebang is useless without the bit. npm
+  // sets it on install, so only a run from the built tree ever sees this.
+  chmodSync(new URL('./dist/cli.js', import.meta.url), 0o755);
 }
