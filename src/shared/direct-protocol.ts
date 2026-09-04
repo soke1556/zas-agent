@@ -21,6 +21,24 @@ export interface DirectMeta {
   label?: string;
 }
 
+/** The three fields both ends must agree on, read off the file itself.
+ *  The offer document seals this before anybody claims it, and the engine
+ *  sends the same reading on the wire once the channel opens; the receiver
+ *  compares the two. One function so the two readings cannot drift - they
+ *  did, and every file an agent offered failed on arrival for it.
+ *
+ *  `mime` has a default because a Blob is allowed to carry no type: a file
+ *  opened by path in Node has none, and a browser gives none to an extension
+ *  it does not know. `name` comes from a File; a plain Blob has none, so the
+ *  caller passes the name it means. */
+export function directMetaOf(file: Blob, fallbackName?: string): DirectMeta {
+  return {
+    name: (file as File).name || fallbackName || 'zas',
+    size: file.size,
+    mime: file.type || 'application/octet-stream',
+  };
+}
+
 export interface DirectDigest {
   size: number;
   sha256: string;

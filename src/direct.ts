@@ -19,7 +19,7 @@ import {
   type DirectPath,
   type SignalMsg,
 } from './shared/direct-engine.js';
-import type { DirectMeta } from './shared/direct-protocol.js';
+import { directMetaOf, type DirectMeta } from './shared/direct-protocol.js';
 import { createFallbackMeta, uploadFallback, type PutPart } from './shared/direct-fallback.js';
 import { ZasError } from './errors.js';
 import { channelKeyOf, channelNameOf, grantsFor, resolveChannel } from './grants.js';
@@ -68,7 +68,7 @@ export interface FailedDirect {
 export interface DirectDeps {
   engine?: typeof startSender;
   installWebRtc?: () => Promise<void>;
-  openFile?: (path: string) => Promise<Blob>;
+  openFile?: (path: string, options?: { type?: string }) => Promise<Blob>;
   sleep?: (ms: number) => Promise<void>;
   now?: () => number;
   /** How long an offer waits for a claim. The server's offer lease. */
@@ -81,6 +81,10 @@ export interface DirectDeps {
   /** Called with the failed run's record right before `direct_failed` is
    *  thrown, so the caller can offer the fallback for it. */
   onFailed?: (record: FailedDirect) => void;
+  /** Called with the engine's own account of the run, done or failed. The
+   *  job record carries it so `zas_jobs` can answer "why" and not only
+   *  "which word" — the reason alone has never been enough to act on. */
+  onDiag?: (diag: DirectDiag) => void;
 }
 
 /** The offer lease (functions: `directLeaseMs('open')`), minus a margin so
@@ -172,9 +176,16 @@ export async function sendDirect(
   const channelName = channelLabel(ctx, grant);
   // A path this agent cannot open is one answer whatever the errno: the
   // caller named it, and a raw Node error is not a sentence.
-  const file = await (deps.openFile ?? openAsBlob)(input.path).catch(() => {
-    throw new ZasError('upload_failed', 400);
-  });
+  //
+  // The type goes on the blob rather than only into the offer: the engine
+  // reads the meta frame off this file, and a receiver that was promised one
+  // type and handed another stops the transfer. `openAsBlob` gives a file no
+  // type of its own, so every offer this agent made used to say `image/png`
+  // and deliver `application/octet-stream`.
+  const file = await (deps.openFile ?? openAsBlob)(input.path, { type: mimeFor(input.path) })
+    .catch(() => {
+      throw new ZasError('upload_failed', 400);
+    });
   if (file.size > DIRECT_FILE_MAX_BYTES) throw new ZasError('file_too_big', 413);
   const name = basename(input.path);
   const cid = grant.channel_id;
@@ -185,7 +196,7 @@ export async function sendDirect(
   const startedAt = now();
 
   report('offer');
-  const meta: DirectMeta = { name, size: file.size, mime: mimeFor(input.path) };
+  const meta: DirectMeta = directMetaOf(file, name);
   const { id } = await ctx.client.api<{ id: string }>('POST', `/direct/${cid}`, {
     meta_enc: seal(meta),
     key_version: grant.key_version,
@@ -250,7 +261,7 @@ export async function sendDirect(
       if (phase === 'done' || phase === 'failed') resolveOutcome(phase);
     },
     onPath: (p) => { path = p; },
-    onDiag: (d) => { diag = d; },
+    onDiag: (d) => { diag = d; deps.onDiag?.(d); },
   });
 
   // ---- the receiver's signals, polled until the engine ends ----

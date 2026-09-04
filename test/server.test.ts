@@ -330,6 +330,41 @@ describe('buildServer', () => {
     await client.close();
   });
 
+  it("hands back the engine's account of a Directo run with the failure, code first", async () => {
+    // Until now a failed Directo run answered with one word — `connect_timeout`
+    // — and the diagnostic the engine had already built went only to
+    // telemetry. An agent on the far machine could not see its own ICE.
+    const diag = {
+      reason: 'connect_timeout', detail: undefined, ms: 30_000,
+      iceState: 'checking', gatherState: 'complete', hadRemoteDesc: true,
+      localHost: 1, localSrflx: 0, localRelay: 0,
+      remoteHost: 1, remoteSrflx: 2, remoteRelay: 2,
+      turnUrlsSupplied: 6, turnUrlsConfigured: 6, bytes: 0, restarts: 0,
+      trace: ['0.00 ice servers stunx2 turn/udpx2 policy=all', '0.23 local host udp'],
+    };
+    const job = {
+      id: 'j1', kind: 'direct' as const, title: 'x.bin', channel: 'Trabajo',
+      started_at: 0, phase: 'finishing' as const, status: 'failed' as const,
+      error: { code: 'direct_failed', status: 0, sentence: '', message: 'connect_timeout' },
+      diag,
+    };
+    const runner = { start: () => job, wait: async () => job } as unknown as JobRunner;
+    const client = await connect(buildServer('p', {
+      identity,
+      client: fakeClient(async () => ({ grants: [grant('c1', workKey, 'Trabajo', true)] })),
+      runner,
+    }));
+    const answer = await call(client, 'zas_send_note', { text: 'anything' });
+    expect(answer.isError).toBe(true);
+    // The word stays on the front, so `answeredCode` and the measurement it
+    // feeds are untouched by everything added after it.
+    expect(answer.text.startsWith('direct_failed: ')).toBe(true);
+    expect(answer.text).toContain('local host=1 srflx=0 relay=0');
+    expect(answer.text).toContain('turn supplied=6 configured=6');
+    expect(answer.text).toContain('0.23 local host udp');
+    await client.close();
+  });
+
   it('refuses a Directo receive off Directo and without a read grant, and a fallback for a job it does not hold', async () => {
     const client = await connect(buildServer('p2', {
       identity,

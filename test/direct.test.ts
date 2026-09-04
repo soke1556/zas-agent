@@ -108,7 +108,7 @@ function fakeEngine(outcome: 'done' | 'failed', reason = '', doneAfterMs = 0) {
 const bytes = new TextEncoder().encode('hello');
 const deps = (over: Partial<DirectDeps> = {}): DirectDeps => ({
   installWebRtc: async () => undefined,
-  openFile: async () => new Blob([bytes]),
+  openFile: async (_path, options) => new Blob([bytes], options),
   // A real timer, short: a sleep that resolves in a microtask would starve
   // the engine fake's timers and the heartbeat.
   sleep: (ms) => new Promise((r) => setTimeout(r, Math.min(ms, 1))),
@@ -158,6 +158,11 @@ describe('sendDirect', () => {
     // is the agent's name, what the receiving row shows as "from".
     expect(engine.opts()!.ice!.some((s) => String(s.urls).startsWith('turn:'))).toBe(true);
     expect(engine.opts()!.label).toBe('Claude Code');
+
+    // The engine builds its own meta frame from the file it was handed, and
+    // the receiver stops a transfer whose frame does not match the offer
+    // above. Both readings come from one file, so the type has to be on it.
+    expect(engine.opts()!.file.type).toBe('text/plain');
 
     expect(wire.calls.find((c) => c.path === '/direct/ch1/o1/state')!.body).toMatchObject({ state: 'done' });
     expect(wire.paths().filter((p) => p.endsWith('/heartbeat')).length).toBeGreaterThan(0);

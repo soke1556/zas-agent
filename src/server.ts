@@ -8,6 +8,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { normalizePairingCode } from './shared/agent.js';
+import { formatDirectDiagLines } from './shared/direct-engine.js';
 import { ZasClient } from './client.js';
 import { sendDirect, sendDirectFallback, type DirectDeps, type FailedDirect } from './direct.js';
 import { humanSentence, ZasError } from './errors.js';
@@ -160,15 +161,28 @@ export function buildServer(profile: string, deps: ServerDeps = {}): McpServer {
    *  same way a thrown `ZasError` would be, because the caller cannot tell the
    *  two apart and must not have to; still running is an id and a phase. */
   const settled = (job: ReturnType<JobRunner['start']>) => {
-    if (job.status === 'done') return text(job.result);
+    if (job.status === 'done') {
+      return job.diag
+        ? text({ ...(job.result as object), diag: formatDirectDiagLines(job.diag) })
+        : text(job.result);
+    }
     if (job.status === 'failed') {
       // Rebuilt whole, not by code alone: the sentence for `identity_corrupt`
       // interpolates the path out of the message, and a `rate_limited` job
       // that lost `retry_after_ms` cannot say how long to wait.
       const e = job.error;
-      return failed(e
+      const answer = failed(e
         ? new ZasError(e.code, e.status, e.message, e.retryAfterMs, e.serverCode)
         : new ZasError('internal', 0));
+      // The engine's account of the run rides in the same text block, after
+      // the sentence. `answeredCode` reads the word off the front, so the
+      // measurement is unchanged and the caller gains the only part of a
+      // Directo failure that has ever been actionable.
+      if (!job.diag) return answer;
+      const said = answer.content[0].text;
+      return { isError: true, ...text(`${said}
+
+${formatDirectDiagLines(job.diag).join('\n')}`) };
     }
     return text({ job_id: job.id, status: 'running', phase: job.phase });
   };
@@ -333,9 +347,10 @@ export function buildServer(profile: string, deps: ServerDeps = {}): McpServer {
       let job: ReturnType<JobRunner['start']>;
       job = runner.start(
         'direct', input.path, input.channel ?? '',
-        (report) => sendDirect(c, input, report, {
+        (report, note) => sendDirect(c, input, report, {
           ...(deps.direct ?? {}),
           onFailed: (record) => rememberFailed(job.id, record),
+          onDiag: note,
         }),
       );
       return settled(await runner.wait(job));
@@ -388,9 +403,10 @@ export function buildServer(profile: string, deps: ServerDeps = {}): McpServer {
       let job: ReturnType<JobRunner['start']>;
       job = runner.start(
         'receive', input.dest ?? 'Directo', input.channel ?? '',
-        (report) => receiveDirect(c, input, report, {
+        (report, note) => receiveDirect(c, input, report, {
           ...(deps.receive ?? {}),
           onFailed: (record) => rememberFailedReceive(job.id, record),
+          onDiag: note,
         }),
       );
       return settled(await runner.wait(job));

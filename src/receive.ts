@@ -89,6 +89,10 @@ export interface ReceiveDeps {
   /** Called with the failed run's record right before `direct_failed` is
    *  thrown, so the caller can offer the fallback for it. */
   onFailed?: (record: FailedReceive) => void;
+  /** Called with the engine's own account of the run, done or failed. The
+   *  job record carries it so `zas_jobs` can answer "why" and not only
+   *  "which word" — the reason alone has never been enough to act on. */
+  onDiag?: (diag: DirectDiag) => void;
 }
 
 /** The offer lease (functions: `directLeaseMs('open')`), minus a margin: an
@@ -326,7 +330,7 @@ export async function receiveDirect(
       if (phase === 'done' || phase === 'failed') resolveOutcome(phase);
     },
     onPath: (p) => { via = p; },
-    onDiag: (d) => { diag = d; },
+    onDiag: (d) => { diag = d; deps.onDiag?.(d); },
     sink: async (m) => { sink.open(m); return sink; },
   });
 

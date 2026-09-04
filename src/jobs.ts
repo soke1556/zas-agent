@@ -3,6 +3,7 @@
 // seconds — so the work is started, waited on for a while, and then reported
 // as still running with an id the caller can ask about later.
 import { randomUUID } from 'node:crypto';
+import type { DirectDiag } from './shared/direct-engine.js';
 import type { DirectJobPhase, DirectResult } from './direct.js';
 import { humanSentence, ZasError } from './errors.js';
 import type { ReceiveJobPhase, ReceiveResult } from './receive.js';
@@ -36,6 +37,11 @@ export interface Job {
   status: 'running' | 'done' | 'failed';
   result?: JobResult;
   error?: JobError;
+  /** The engine's account of a Directo run, when the work produced one.
+   *  Kept on the job rather than folded into `error`, because a run that
+   *  finished has one too and the comparison between a good run and a bad
+   *  one is the whole diagnosis. */
+  diag?: DirectDiag;
 }
 
 /** How long a caller waits before the answer becomes "still going". Long
@@ -66,7 +72,10 @@ export class JobRunner {
     kind: Job['kind'],
     title: string,
     channel: string,
-    work: (report: (phase: JobPhase) => void) => Promise<JobResult>,
+    work: (
+      report: (phase: JobPhase) => void,
+      note: (diag: DirectDiag) => void,
+    ) => Promise<JobResult>,
   ): Job {
     const job: Job = {
       id: randomUUID(),
@@ -82,9 +91,12 @@ export class JobRunner {
     const report = (phase: JobPhase): void => {
       if (job.status === 'running') job.phase = phase;
     };
+    // Unconditional: a diagnostic arrives once, at the end, and a job that
+    // has already settled is exactly the job whose diagnostic is wanted.
+    const note = (diag: DirectDiag): void => { job.diag = diag; };
     // The promise is settled here and never rethrown: a failure is a field on
     // the job, and an unobserved rejection would take the process down.
-    this.settled.set(job, work(report).then(
+    this.settled.set(job, work(report, note).then(
       (result) => {
         job.status = 'done';
         job.result = result;

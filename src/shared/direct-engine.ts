@@ -25,6 +25,7 @@ import {
   encodeChunk,
   encodeCredit,
   encodeDone,
+  directMetaOf,
   encodeMeta,
   parseFrame,
   type DirectMeta,
@@ -70,6 +71,12 @@ export interface DirectDiag {
    *  ice_failed, disconnected, peer_closed, peer_abort, signaling,
    *  signal_send, protocol, sink, transfer, too_big. */
   reason: string;
+  /** The thrown error's own message, when the failure came from an exception
+   *  rather than a decision. `reason` has to stay a closed set — telemetry
+   *  groups on it — so every real cause used to be discarded at the catch.
+   *  This is that cause, trimmed: one `transfer` in a thousand is the disk
+   *  filling up, and nothing in the closed set can say so. */
+  detail?: string;
   /** Engine start to terminal phase, ms. */
   ms: number;
   /** Engine start to the data channel opening, ms; absent if it never did. */
@@ -100,6 +107,16 @@ export interface DirectDiag {
    *  transfer with restarts > 0 is a rebinding network survived, not a clean
    *  path. */
   restarts: number;
+  /** The session as it happened, one short line per event, stamped with
+   *  seconds since the engine started: the ICE server shapes it was given,
+   *  every candidate by type and transport, the gathering and connection
+   *  states, and the terminal verdict. The counts above say what was
+   *  gathered; this says when, and in what order, which is the difference
+   *  between "no reflexive candidate" and "no reflexive candidate yet".
+   *  Same rule as the counts: types, transports and timings only — never an
+   *  address, a port, a host name or a credential. Bounded at TRACE_MAX
+   *  lines, so a long session cannot grow it without limit. */
+  trace: string[];
 }
 
 /** The type inside a candidate line: `... typ host ...` → 'host'. */
@@ -108,9 +125,105 @@ function candType(candidate: RTCIceCandidateInit | null | undefined): string {
   return m ? m[1] : 'other';
 }
 
+/** The transport inside a candidate line: field 3 of `candidate:<foundation>
+ *  <component> <transport> ...`. A relay candidate always reads `udp` here —
+ *  that is the leg between the peers, not the leg to the TURN server, which
+ *  SDP never carries. `tcptype` is appended when present, because a passive
+ *  TCP candidate and an active one behave differently. */
+function candProto(candidate: RTCIceCandidateInit | null | undefined): string {
+  const line = candidate?.candidate ?? '';
+  // Three shapes reach here. A browser writes `candidate:<foundation> ...`;
+  // node-datachannel prefixes the SDP attribute, `a=candidate:...`; and the
+  // bare form with no prefix is legal on the wire too. All three are the same
+  // line, so the prefix is optional rather than assumed.
+  const m = /^(?:a=)?(?:candidate:)?\S+\s+\d+\s+(\S+)/.exec(line);
+  const proto = m ? m[1].toLowerCase() : '?';
+  const tcp = /\stcptype\s+(\S+)/.exec(line);
+  return tcp ? `${proto}/${tcp[1]}` : proto;
+}
+
+/** How many lines a trace may hold. Gathering against six TURN URLs on a
+ *  multi-homed machine is the busy case and stays well inside this. */
+const TRACE_MAX = 200;
+
+/** How much of a thrown error's message is kept. Long enough for a stack's
+ *  first line, short enough that it cannot become the whole report. */
+const DETAIL_MAX = 200;
+
+/** A thrown value as one line. Errors give their message; anything else is
+ *  stringified, because a rejection is not obliged to be an Error. */
+function errText(e: unknown): string {
+  const raw = e instanceof Error ? (e.message || e.name) : String(e);
+  const line = raw.replace(/\s+/g, ' ').trim();
+  return line.length > DETAIL_MAX ? `${line.slice(0, DETAIL_MAX)}…` : line;
+}
+
+/** Engine start per diag. Held beside the diag rather than inside it: the
+ *  trace needs a clock, the diag's readers do not, and every call site that
+ *  traces already has the diag in hand. */
+const traceStart = new WeakMap<DirectDiag, number>();
+
+/** Appends one trace line, stamped with seconds since the engine started.
+ *  The cap is a hard stop with a marker, never a silent truncation. */
+function traceAdd(diag: DirectDiag, line: string): void {
+  if (diag.trace.length >= TRACE_MAX) return;
+  if (diag.trace.length === TRACE_MAX - 1) {
+    diag.trace.push('trace full');
+    return;
+  }
+  const t0 = traceStart.get(diag);
+  const at = t0 === undefined ? 0 : (Date.now() - t0) / 1000;
+  diag.trace.push(`${at.toFixed(2)} ${line}`);
+}
+
+/** The ICE server list as shapes, for the trace: scheme and transport of
+ *  every URL, counted. The host names are the relay operator's and the
+ *  credentials are metered, so neither belongs in something a person pastes
+ *  into a channel. `stun:x?transport=udp` and a bare `stun:x` are one shape. */
+function iceShapes(servers: RTCIceServer[] | undefined): string {
+  const seen = new Map<string, number>();
+  for (const server of servers ?? []) {
+    const urls = typeof server.urls === 'string' ? [server.urls] : server.urls;
+    for (const url of urls ?? []) {
+      const scheme = /^(stuns?|turns?):/i.exec(url)?.[1]?.toLowerCase() ?? 'other';
+      const transport = /[?&]transport=(\w+)/i.exec(url)?.[1]?.toLowerCase();
+      const shape = transport ? `${scheme}/${transport}` : scheme;
+      seen.set(shape, (seen.get(shape) ?? 0) + 1);
+    }
+  }
+  const parts = [...seen].map(([shape, n]) => `${shape}x${n}`);
+  return parts.length > 0 ? parts.join(' ') : 'none';
+}
+
+/** The diagnostic as lines a person reads, in the order that answers "what
+ *  happened": the verdict, then the counts, then the session itself. One
+ *  formatter for both ends, so a browser's block and an agent's block can be
+ *  laid side by side without translating between them. The caller adds its
+ *  own heading and indent — this knows the diag, not where it is printed. */
+export function formatDirectDiagLines(d: DirectDiag): string[] {
+  const connect = d.msConnect === undefined ? '-' : `${d.msConnect}ms`;
+  const pair = d.pairLocal || d.pairRemote ? `${d.pairLocal || '?'}/${d.pairRemote || '?'}` : 'none';
+  return [
+    `ms=${d.ms} connect=${connect} bytes=${d.bytes} restarts=${d.restarts} pair=${pair}`,
+    ...(d.detail === undefined ? [] : [`detail ${d.detail}`]),
+    `local host=${d.localHost} srflx=${d.localSrflx} relay=${d.localRelay}`
+      + `   remote host=${d.remoteHost} srflx=${d.remoteSrflx} relay=${d.remoteRelay}`,
+    `turn supplied=${d.turnUrlsSupplied} configured=${d.turnUrlsConfigured}`
+      + `   ice=${d.iceState} gather=${d.gatherState} remote_desc=${d.hadRemoteDesc}`,
+    ...(d.trace ?? []),
+  ];
+}
+
 function countCand(diag: DirectDiag, side: 'local' | 'remote', c: RTCIceCandidateInit | null | undefined): void {
-  if (!c) return;
+  // A null candidate is the end-of-candidates marker, which is exactly the
+  // event a stalled gathering never reaches. It counts for nothing and
+  // matters more than most lines in the trace.
+  if (!c) {
+    traceAdd(diag, `${side} end-of-candidates`);
+    return;
+  }
   const t = candType(c);
+  traceAdd(diag, `${side} ${t} ${candProto(c)}`);
   if (t === 'host') diag[side === 'local' ? 'localHost' : 'remoteHost']++;
   else if (t === 'srflx' || t === 'prflx') diag[side === 'local' ? 'localSrflx' : 'remoteSrflx']++;
   else if (t === 'relay') diag[side === 'local' ? 'localRelay' : 'remoteRelay']++;
@@ -183,6 +296,16 @@ function session(
   const pc = new RTCPeerConnection({
     iceServers: initialIce,
     iceTransportPolicy,
+    // Gather before there is anything to gather for. A receiver whose peer
+    // is an agent gets the whole remote candidate set at once — the agent
+    // writes it and leaves — so checking starts in the same tick as the local
+    // description, a pair comes up on the first candidate found, and
+    // gathering is reported complete before any relay allocation returns.
+    // Measured 2026-09-04: one host candidate, no relay, gathering done at
+    // 240 ms, and when that pair died five seconds later there was nothing
+    // to fall back to. The pool does the allocations up front, at construction,
+    // so the relay candidates exist before the first check is ever sent.
+    iceCandidatePoolSize: 1,
   });
   let phase: DirectPhase = 'connecting';
   let disconnectTimer: ReturnType<typeof setTimeout> | undefined;
@@ -194,7 +317,12 @@ function session(
     localHost: 0, localSrflx: 0, localRelay: 0,
     remoteHost: 0, remoteSrflx: 0, remoteRelay: 0,
     turnUrlsSupplied: countTurnUrls(initialIce), turnUrlsConfigured: 0,
-    bytes: 0, restarts: 0,
+    bytes: 0, restarts: 0, trace: [],
+  };
+  traceStart.set(diag, startedAt);
+  traceAdd(diag, `ice servers ${iceShapes(initialIce)} policy=${iceTransportPolicy}`);
+  pc.onicegatheringstatechange = () => {
+    traceAdd(diag, `gather ${String((pc as { iceGatheringState?: string }).iceGatheringState ?? '')}`);
   };
 
   const cleanup = () => {
@@ -204,6 +332,7 @@ function session(
     clearTimeout(restartTimer);
     pc.onicecandidate = null;
     pc.oniceconnectionstatechange = null;
+    pc.onicegatheringstatechange = null;
     pc.close();
   };
   const setPhase = (p: DirectPhase) => {
@@ -217,6 +346,7 @@ function session(
       diag.gatherState = String((pc as { iceGatheringState?: string }).iceGatheringState ?? '');
       diag.hadRemoteDesc = hasRemoteDescription(pc);
       diag.turnUrlsConfigured = countTurnUrls(pc.getConfiguration().iceServers);
+      traceAdd(diag, `${p}${diag.reason ? ` ${diag.reason}` : ''} ice=${diag.iceState} gather=${diag.gatherState}`);
       onDiag?.(diag);
       onPhase(p);
       cleanup();
@@ -224,10 +354,14 @@ function session(
     }
     onPhase(p);
   };
-  const fail = (reason: string) => {
+  const fail = (reason: string, cause?: unknown) => {
     if (phase === 'done' || phase === 'failed') return;
     // First reason wins: the cause, not the cascade it sets off.
     if (!diag.reason) diag.reason = reason;
+    if (cause !== undefined && diag.detail === undefined) {
+      diag.detail = errText(cause);
+      traceAdd(diag, `detail ${diag.detail}`);
+    }
     setPhase('failed');
   };
 
@@ -265,6 +399,7 @@ function session(
     }
     stallState = 'restarting';
     diag.restarts++;
+    traceAdd(diag, 'ice restart');
     clearTimeout(restartTimer);
     restartTimer = setTimeout(() => fail('disconnected'), stallWindowMs);
     onStall();
@@ -272,6 +407,7 @@ function session(
 
   pc.oniceconnectionstatechange = () => {
     const s = pc.iceConnectionState;
+    traceAdd(diag, `ice ${String(s ?? '')}`);
     if (s === 'failed') {
       // Mid-flight, `failed` is a stall with the verdict already in; before
       // the channel ever opened it is the TURN-shaped hole in the funnel.
@@ -301,7 +437,10 @@ function session(
     connected: () => {
       clearTimeout(waitTimer);
       clearTimeout(connectTimer);
-      if (diag.msConnect === undefined) diag.msConnect = Date.now() - startedAt;
+      if (diag.msConnect === undefined) {
+        diag.msConnect = Date.now() - startedAt;
+        traceAdd(diag, 'channel open');
+      }
     },
     isTerminal: () => phase === 'done' || phase === 'failed',
     setStall: (fn: () => void, windowMs: number) => {
@@ -310,6 +449,7 @@ function session(
     },
     setIceServers: (iceServers: RTCIceServer[]) => {
       diag.turnUrlsSupplied = countTurnUrls(iceServers);
+      traceAdd(diag, `ice servers replaced ${iceShapes(iceServers)}`);
       pc.setConfiguration({ iceServers });
     },
   };
@@ -425,7 +565,7 @@ export function startSender(opts: SenderOpts): DirectHandle {
       const offer = await pc.createOffer({ iceRestart: true });
       await pc.setLocalDescription(offer);
       await opts.send({ kind: 'offer', sdp: offer.sdp, protocol: 2, generation });
-    })().catch(() => s.fail('signaling'));
+    })().catch((e: unknown) => s.fail('signaling', e));
   }, DIRECT_CONNECT_TIMEOUT_MS);
 
   const dc = pc.createDataChannel('zas-direct', { ordered: true });
@@ -459,9 +599,7 @@ export function startSender(opts: SenderOpts): DirectHandle {
 
   const pump = async () => {
     const meta: DirectMeta = {
-      name: (opts.file as File).name ?? opts.name ?? 'zas',
-      size: opts.file.size,
-      mime: opts.file.type || 'application/octet-stream',
+      ...directMetaOf(opts.file, opts.name),
       ...(opts.label !== undefined ? { label: opts.label } : {}),
     };
     dc.send(encodeMeta(meta) as unknown as ArrayBuffer);
@@ -507,7 +645,7 @@ export function startSender(opts: SenderOpts): DirectHandle {
         opts.onPath?.(pathOf(pair));
       })
       .catch(() => undefined);
-    void pump().catch(() => s.fail('transfer'));
+    void pump().catch((e: unknown) => s.fail('transfer', e));
   };
   dc.onmessage = (e) => {
     // The only thing a receiver says back: DONE once its sink has closed over
@@ -539,7 +677,7 @@ export function startSender(opts: SenderOpts): DirectHandle {
     plumbing.setLocalGeneration(generation);
     plumbing.expectRemoteGeneration(generation);
     await opts.send({ kind: 'offer', sdp: offer.sdp, protocol: 2, generation });
-  })().catch(() => s.fail('signaling'));
+  })().catch((e: unknown) => s.fail('signaling', e));
 
   return {
     accept: (msg) => {
@@ -555,7 +693,7 @@ export function startSender(opts: SenderOpts): DirectHandle {
         void pc
           .setRemoteDescription({ type: 'answer', sdp: msg.sdp })
           .then(() => plumbing.remoteDescriptionSet(answerGeneration))
-          .catch(() => s.fail('signaling'));
+          .catch((e: unknown) => s.fail('signaling', e));
       }
       if (msg.kind === 'ice') plumbing.applyIce(msg.candidate, msg.generation);
     },
@@ -676,11 +814,16 @@ export function startReceiver(opts: ReceiverOpts): DirectHandle {
             s.fail(frame.meta.size > DIRECT_FILE_MAX_BYTES ? 'too_big' : 'protocol');
             return;
           }
+          // The name and the size are what the person agreed to when they
+          // pressed Receive, so a frame that renames or resizes the file is a
+          // different file and the transfer stops here. The type is not part
+          // of that promise: it decides nothing the person can see, the sink
+          // takes it from this frame anyway, and a sender built before
+          // `directMetaOf` reads it from the path while sending the default.
           if (
             opts.expectedMeta &&
             (frame.meta.name !== opts.expectedMeta.name ||
-              frame.meta.size !== opts.expectedMeta.size ||
-              frame.meta.mime !== opts.expectedMeta.mime)
+              frame.meta.size !== opts.expectedMeta.size)
           ) {
             dc?.send(ABORT_FRAME as unknown as ArrayBuffer);
             s.fail('protocol');
@@ -693,7 +836,7 @@ export function startReceiver(opts: ReceiverOpts): DirectHandle {
             sinkRef = sink;
             return sink;
           });
-          pipeline.catch(() => s.fail('sink'));
+          pipeline.catch((e: unknown) => s.fail('sink', e));
         } else if (frame.type === 'chunk') {
           if (!pipeline || finished) throw new Error('chunk_before_meta');
           queued += frame.payload.length;
@@ -711,7 +854,7 @@ export function startReceiver(opts: ReceiverOpts): DirectHandle {
             }
             return sink;
           });
-          pipeline.catch(() => s.fail('sink'));
+          pipeline.catch((e: unknown) => s.fail('sink', e));
         } else if (frame.type === 'done') {
           if (!pipeline || finished) throw new Error('done_before_meta');
           finished = true;
@@ -729,7 +872,7 @@ export function startReceiver(opts: ReceiverOpts): DirectHandle {
               dc?.send(DONE_FRAME as unknown as ArrayBuffer);
               s.setPhase('done');
             })
-            .catch(() => s.fail('integrity'));
+            .catch((e: unknown) => s.fail('integrity', e));
         } else if (frame.type === 'abort') {
           // The failed phase lets go of the sink; nothing more to do here.
           s.fail('peer_abort');
@@ -770,7 +913,7 @@ export function startReceiver(opts: ReceiverOpts): DirectHandle {
           const answer = await pc.createAnswer();
           await pc.setLocalDescription(answer);
           await opts.send({ kind: 'answer', sdp: answer.sdp, protocol: 2, generation });
-        })().catch(() => s.fail('signaling'));
+        })().catch((e: unknown) => s.fail('signaling', e));
       }
       if (msg.kind === 'ice') plumbing.applyIce(msg.candidate, msg.generation);
     },

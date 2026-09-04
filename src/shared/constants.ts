@@ -123,9 +123,14 @@ export interface AgentLimits {
   channels_per_agent: number | null;
 }
 
+/** `pro` and `max` carry the same numbers as `free` today. They are named
+ *  anyway: `agentLimitsFor` falls back to `free` for a plan it does not know,
+ *  so a later cut to the free row would quietly cut every paying account. */
 export const AGENT_LIMITS: Record<string, AgentLimits> = {
   anon: { agents: 0, channels_per_agent: 0 },
-  free: { agents: 2, channels_per_agent: 2 },
+  free: { agents: 5, channels_per_agent: 5 },
+  pro: { agents: 5, channels_per_agent: 5 },
+  max: { agents: 5, channels_per_agent: 5 },
 };
 
 export function agentLimitsFor(plan: string | undefined): AgentLimits {

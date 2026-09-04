@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-09-04
+
+### Added
+
+- A Directo run now answers with the engine's own account of itself, not
+  only with one word. `zas_send_direct`, `zas_receive_direct` and `zas_jobs`
+  carry the candidate counts by type for both ends, the ICE and gathering
+  states, how many TURN URLs were supplied against how many the connection
+  kept, the selected pair, the restarts, and a timestamped trace of the
+  session: every candidate as it arrived, the state changes, and the verdict.
+  Types, transports and timings only — never an address, a port, a host name
+  or a credential. A run that fails on a machine you are not sitting at can
+  now be diagnosed from the tool result.
+- The thrown error behind a failure is kept as `detail`. The reason stays a
+  closed word for grouping; `detail` is the sentence the exception carried,
+  which every failure used to discard at the catch.
+
+### Fixed
+
+- The receiver pre-gathers a candidate pool. An agent hands its whole
+  candidate set over at once, so the far end could start checking before its
+  own relay candidates existed, connect on the first pair it found, and be
+  left with nothing when that pair died seconds later.
+- The transport of a candidate is read whichever way the peer wrote the line.
+  This package prefixes the SDP attribute, so its candidates used to be
+  reported with an unknown transport.
+
 ## [0.6.0] - 2026-09-03
 
 ### Added
@@ -156,7 +183,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   two separate identities that cannot read each other's keys.
 - Install snippets for Claude Code and Codex, printed by `zas-agent pair`.
 
-[Unreleased]: https://github.com/soke1556/zas-agent/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/soke1556/zas-agent/compare/v0.6.1...HEAD
+[0.6.1]: https://github.com/soke1556/zas-agent/compare/v0.6.0...v0.6.1
+[0.6.0]: https://github.com/soke1556/zas-agent/compare/v0.5.1...v0.6.0
+[0.5.1]: https://github.com/soke1556/zas-agent/compare/v0.5.0...v0.5.1
+[0.5.0]: https://github.com/soke1556/zas-agent/compare/v0.4.0...v0.5.0
+[0.4.0]: https://github.com/soke1556/zas-agent/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/soke1556/zas-agent/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/soke1556/zas-agent/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/soke1556/zas-agent/compare/v0.1.1...v0.2.0
