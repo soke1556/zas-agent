@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.3] - 2026-09-04
+
+### Fixed
+
+- The selected candidate pair is read from the transport, which names its
+  own pair on every engine. A transfer that connected and carried its whole
+  file could report `pair=none`, because the browser at the other end does
+  not mark a pair `nominated` on the controlled side. The empty field was
+  read as a missing pair and sent two rounds of diagnosis after a
+  connection that had been there all along.
+- A peer connection state of `failed` has to hold before the engine acts on
+  it. Chrome reports `failed` while it is still gathering and returns to
+  `connecting` in the same millisecond; acting on the first one killed a
+  receiver at 0.88 s with pairs still waiting to be tried. The settle window
+  is shorter than the ICE grace, so a connection that really is dead still
+  gives up sooner than it did before.
+
+### Added
+
+- The trace counts candidate pairs by check state just before the verdict:
+  `checks failed=24 in-progress=4`, or `checks none`. No pair selected could
+  not tell a run that formed no pairs from one that formed pairs and lost
+  every check, and those are different faults.
+- A candidate the peer refuses is traced as `ice apply rejected <type>
+  <ErrorName>`. The rejection used to be swallowed, so a refused candidate
+  looked exactly like one the network lost.
+
 ## [0.6.2] - 2026-09-04
 
 ### Added
@@ -205,7 +232,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   two separate identities that cannot read each other's keys.
 - Install snippets for Claude Code and Codex, printed by `zas-agent pair`.
 
-[Unreleased]: https://github.com/soke1556/zas-agent/compare/v0.6.2...HEAD
+[Unreleased]: https://github.com/soke1556/zas-agent/compare/v0.6.3...HEAD
+[0.6.3]: https://github.com/soke1556/zas-agent/compare/v0.6.2...v0.6.3
 [0.6.2]: https://github.com/soke1556/zas-agent/compare/v0.6.1...v0.6.2
 [0.6.1]: https://github.com/soke1556/zas-agent/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/soke1556/zas-agent/compare/v0.5.1...v0.6.0

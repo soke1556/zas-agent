@@ -105,6 +105,19 @@ export const DIRECT_CONNECT_TIMEOUT_MS = 30 * 1000;
  *  them within sight of its last byte. */
 export const DIRECT_STALL_GRACE_MS = 5 * 1000;
 
+/** How long the verdict waits for the candidate-pair census. The census is a
+ *  diagnostic and the verdict belongs to the transfer, so a stats read that
+ *  never settles reports without it rather than holding the failure open. */
+export const DIRECT_CENSUS_WAIT_MS = 250;
+
+/** How long `connectionState: 'failed'` has to hold before the engine acts on
+ *  it. Chrome reports `failed` transiently while it is still gathering and
+ *  returns to `connecting` in the same millisecond; acting on the first one
+ *  killed a receiver at 0.88 s with two pairs still waiting to be tried.
+ *  Shorter than the ICE grace, so a connection that really is dead still
+ *  gives up sooner than it would on the ICE transport alone. */
+export const DIRECT_CONN_FAILED_SETTLE_MS = 1500;
+
 /** How long an engine waits for the peer to say anything at all. A phone
  *  that backgrounded its tab needs its human to bring it back before it can
  *  speak — that is a person's clock, not ICE's, so it gets minutes where the

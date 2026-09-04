@@ -1,6 +1,6 @@
 {
   "name": "zas-agent",
-  "version": "0.6.2",
+  "version": "0.6.3",
   "description": "MCP server that lets a coding agent send files and notes into your Zas channels, and send or receive files live through Directo.",
   "type": "module",
   "license": "MIT",

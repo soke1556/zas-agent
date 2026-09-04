@@ -11,7 +11,9 @@
 // browser-only receiver sink lives in web/src/lib/direct.ts.
 import {
   DIRECT_BUFFERED_HIGH,
+  DIRECT_CENSUS_WAIT_MS,
   DIRECT_CHUNK_BYTES,
+  DIRECT_CONN_FAILED_SETTLE_MS,
   DIRECT_CONNECT_TIMEOUT_MS,
   DIRECT_FILE_MAX_BYTES,
   DIRECT_RECEIVE_WINDOW_BYTES,
@@ -273,19 +275,49 @@ function countTurnUrls(servers: RTCIceServer[] | undefined): number {
   return n;
 }
 
-/** The selected pair's candidate types, when the stats name one. */
+/** The selected pair's candidate types, when the stats name one.
+ *
+ *  The transport names its own pair and is the only reading that is right on
+ *  every engine. Chrome leaves `nominated` unset on the controlled side, so
+ *  the heuristic below it reported `pair=none` on runs that had connected and
+ *  carried the whole file — and that empty field was read as a missing pair
+ *  twice, once here and once by the agent on the other end of the same bug. */
 function pairFromStats(stats: RTCStatsReport): { local: string; remote: string } | undefined {
   let pair: { localCandidateId?: string; remoteCandidateId?: string } | undefined;
+  let selectedId: string | undefined;
   stats.forEach((s: Record<string, unknown>) => {
+    if (s.type === 'transport' && typeof s.selectedCandidatePairId === 'string') {
+      selectedId = s.selectedCandidatePairId;
+    }
     if (s.type === 'candidate-pair' && s.state === 'succeeded' && (s.nominated || s.selected)) {
       pair = s as typeof pair;
     }
   });
+  if (selectedId) {
+    const named = stats.get(selectedId) as typeof pair;
+    if (named?.localCandidateId && named.remoteCandidateId) pair = named;
+  }
   if (!pair?.localCandidateId || !pair.remoteCandidateId) return undefined;
   const local = stats.get(pair.localCandidateId) as { candidateType?: string } | undefined;
   const remote = stats.get(pair.remoteCandidateId) as { candidateType?: string } | undefined;
   if (!local?.candidateType || !remote?.candidateType) return undefined;
   return { local: local.candidateType, remote: remote.candidateType };
+}
+
+/** Candidate pairs counted by check state. `pair=none` on its own cannot
+ *  separate a run that formed no pairs from one that formed pairs and lost
+ *  every check, and those are different faults: the first is a candidate that
+ *  never arrived, the second is a path that never answered. */
+function checkCensus(stats: RTCStatsReport): string {
+  const counts = new Map<string, number>();
+  stats.forEach((s: Record<string, unknown>) => {
+    if (s.type !== 'candidate-pair') return;
+    const state = String(s.state ?? '?');
+    counts.set(state, (counts.get(state) ?? 0) + 1);
+  });
+  if (counts.size === 0) return 'checks none';
+  const parts = [...counts].map(([state, n]) => `${state}=${n}`);
+  return `checks ${parts.join(' ')}`;
 }
 
 /** The pair read as a path: both ends `host` means the bytes never left the
@@ -341,6 +373,7 @@ function session(
   let phase: DirectPhase = 'connecting';
   let disconnectTimer: ReturnType<typeof setTimeout> | undefined;
   let restartTimer: ReturnType<typeof setTimeout> | undefined;
+  let connFailTimer: ReturnType<typeof setTimeout> | undefined;
   let stallState: 'idle' | 'grace' | 'restarting' = 'idle';
   const startedAt = Date.now();
   const diag: DirectDiag = {
@@ -362,7 +395,32 @@ function session(
   // line a stalled handshake and a stalled SCTP association look identical.
   const connState = () => String((pc as { connectionState?: string }).connectionState ?? '');
   (pc as { onconnectionstatechange?: (() => void) | null }).onconnectionstatechange = () => {
-    traceAdd(diag, `conn ${connState()}`);
+    const state = connState();
+    traceAdd(diag, `conn ${state}`);
+    if (state !== 'failed') {
+      clearTimeout(connFailTimer);
+      connFailTimer = undefined;
+      return;
+    }
+    if (connFailTimer !== undefined) return;
+    // `failed` here is ICE or DTLS giving up. Read together with a merely
+    // `disconnected` ICE transport it says the grace window cannot help —
+    // measured 2026-09-04, five seconds spent waiting for a recovery the peer
+    // connection had already ruled out.
+    //
+    // But it has to settle first. Chrome reports `failed` transiently while
+    // it is still gathering, and goes back to `connecting` in the same
+    // millisecond: measured on a receiver killed at 0.88 s with two pairs
+    // still `waiting` and the sender's relay candidates not yet delivered.
+    // Acting on the first `failed` turned a run that would have connected
+    // into `ice_failed`. This window is shorter than the ICE grace, so a
+    // connection that really is dead still gives up sooner than before.
+    connFailTimer = setTimeout(() => {
+      connFailTimer = undefined;
+      if (connState() !== 'failed') return;
+      if (diag.msConnect !== undefined && onStall) stalled();
+      else failWithCensus('ice_failed');
+    }, DIRECT_CONN_FAILED_SETTLE_MS);
   };
   // The data channel is the sender's or the receiver's, not the session's,
   // so it is handed over once it exists. Only its state is read.
@@ -379,6 +437,7 @@ function session(
 
   const cleanup = () => {
     clearTimeout(waitTimer);
+    clearTimeout(connFailTimer);
     clearTimeout(connectTimer);
     clearTimeout(disconnectTimer);
     clearTimeout(restartTimer);
@@ -423,6 +482,28 @@ function session(
     }
     setPhase('failed');
   };
+  // The census has to be read while the connection is still open, and
+  // `setPhase` closes it. So the stats come first and the verdict follows.
+  // The verdict is the transfer's, not the diagnostic's: a stats read that
+  // never settles must not hold it, so the timer reports without the census.
+  const failWithCensus = (reason: string) => {
+    if (phase === 'done' || phase === 'failed') return;
+    let reported = false;
+    const report = () => {
+      if (reported) return;
+      reported = true;
+      fail(reason);
+    };
+    const guard = setTimeout(report, DIRECT_CENSUS_WAIT_MS);
+    void pc
+      .getStats()
+      .then((stats) => traceAdd(diag, checkCensus(stats)))
+      .catch(() => undefined)
+      .then(() => {
+        clearTimeout(guard);
+        report();
+      });
+  };
 
   // Two clocks, one after the other. Until the peer's first signal arrives
   // the wait is a human's — a backgrounded phone needs its person to bring
@@ -441,7 +522,7 @@ function session(
       // succeeded and the layer above it did not. Same clock, different
       // fault, and telemetry groups on the word — so it gets its own.
       const iceUp = pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed';
-      fail(iceUp ? 'channel_never_opened' : 'connect_timeout');
+      failWithCensus(iceUp ? 'channel_never_opened' : 'connect_timeout');
     }, DIRECT_CONNECT_TIMEOUT_MS);
   };
 
@@ -459,7 +540,10 @@ function session(
     clearTimeout(disconnectTimer);
     if (stallState === 'restarting') return;
     if (diag.msConnect === undefined || !onStall) {
-      fail('disconnected');
+      // `disconnected` reads as "it was up and then dropped". A run that
+      // never opened a channel was never up, and the word sent two rounds of
+      // diagnosis looking for a connection that had come and gone.
+      failWithCensus(diag.msConnect === undefined ? 'ice_failed' : 'disconnected');
       return;
     }
     stallState = 'restarting';
@@ -477,7 +561,7 @@ function session(
       // Mid-flight, `failed` is a stall with the verdict already in; before
       // the channel ever opened it is the TURN-shaped hole in the funnel.
       if (diag.msConnect !== undefined && onStall) stalled();
-      else fail('ice_failed');
+      else failWithCensus('ice_failed');
     }
     // Wi-Fi hiccups produce `disconnected` and recover on their own; give
     // them the grace window before opening a fresh handshake.
@@ -558,8 +642,18 @@ function signalPlumbing(
       generation: localGeneration,
     }).catch(onSendError);
   };
+  // Swallowing this rejection hid the one boundary the trace could not see.
+  // A candidate the browser refuses never reaches the check list, and the run
+  // then reads as a network fault. The type and the error's name are enough to
+  // name it; the message carries the candidate, so it stays out.
+  let applyRejects = 0;
   const apply = (candidate: RTCIceCandidateInit | null) => {
-    void pc.addIceCandidate((candidate ?? undefined) as RTCIceCandidateInit).catch(() => undefined);
+    void pc.addIceCandidate((candidate ?? undefined) as RTCIceCandidateInit).catch((e: unknown) => {
+      if (applyRejects >= 3) return;
+      applyRejects++;
+      const name = (e as { name?: string } | null)?.name || 'Error';
+      traceAdd(diag, `ice apply rejected ${candidate ? candType(candidate) : 'end'} ${name}`);
+    });
   };
   // Counting happens only at the outer entry — flushIce replays through
   // `apply`, so a queued candidate is never counted twice.
