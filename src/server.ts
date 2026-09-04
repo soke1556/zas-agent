@@ -20,6 +20,7 @@ import { runPair } from './pair.js';
 import { getItem, listItems } from './read.js';
 import { sendFile, sendNote, type SendContext } from './send.js';
 import { kindForProfile, packageName } from './snippets.js';
+import { report, telemetryLine, toolCallProperties } from './telemetry.js';
 
 export interface ServerDeps {
   identity?: Identity;
@@ -82,9 +83,53 @@ function rightsOf(grant: RemoteGrant): string {
   return rights.length > 0 ? rights.join(' · ') : 'no access';
 }
 
+/** What every tool answers with. Only the two fields the measurement reads. */
+interface ToolAnswer { isError?: boolean; content?: { text?: string }[] }
+
+/** The code a tool answered with, or null when the call worked. Every failure
+ *  this file builds starts with `code: ` — `failed` writes it, and `settled`
+ *  rebuilds a failed job through `failed` — so the answer carries the word
+ *  without a second channel for it. */
+export function answeredCode(answer: ToolAnswer): string | null {
+  if (!answer?.isError) return null;
+  const match = /^([a-z_]{2,40}):/.exec(answer.content?.[0]?.text ?? '');
+  return match ? match[1] : 'other';
+}
+
 export function buildServer(profile: string, deps: ServerDeps = {}): McpServer {
   const server = new McpServer({ name: 'zas', version: agentVersion() });
   const runner = deps.runner ?? new JobRunner();
+
+  /** One report per tool call. An unpaired profile reports nothing: there is
+   *  no session to report through, and no account it would belong to. */
+  const reportCall = async (tool: string, ms: number, code: string | null): Promise<void> => {
+    try {
+      if (!(deps.identity ?? loadIdentity(profile))) return;
+      await report(ctx().client, toolCallProperties({ tool, ms, code, version: agentVersion() }));
+    } catch { /* nothing about analytics may reach the caller */ }
+  };
+
+  // Measured here rather than in eleven places, so a tool added later is
+  // measured without anyone remembering to. The report is started after the
+  // answer is built and never waited for: a tool call's result must not
+  // depend on whether analytics worked.
+  const registerRaw = server.registerTool.bind(server) as (...args: unknown[]) => unknown;
+  (server as unknown as { registerTool: unknown }).registerTool = (
+    name: string,
+    meta: unknown,
+    handler: (...args: unknown[]) => Promise<ToolAnswer>,
+  ) => registerRaw(name, meta, async (...args: unknown[]) => {
+    const started = Date.now();
+    try {
+      const answer = await handler(...args);
+      void reportCall(name, Date.now() - started, answeredCode(answer));
+      return answer;
+    } catch (e) {
+      // Not how these tools answer, but a throw is still a call that failed.
+      void reportCall(name, Date.now() - started, e instanceof ZasError ? e.code : 'internal');
+      throw e;
+    }
+  });
 
   // One session per identity. A fresh `ZasClient` on every tool call would
   // sign in again each time — a challenge and a token per call, out of the
@@ -157,6 +202,7 @@ export function buildServer(profile: string, deps: ServerDeps = {}): McpServer {
         grants.length > 0 ? 'Channels:' : 'No channels: the owner has not granted access to any yet.',
         ...lines,
         `${packageName()} ${agentVersion()} · profile ${profile}`,
+        `${telemetryLine()} · change it with “npx -y ${packageName()} telemetry off”`,
       ].join('\n'));
     } catch (e) {
       return failed(e);

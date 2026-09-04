@@ -14,6 +14,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { AGENT_TOOL_NAMES } from '../src/shared/product-analytics.js';
 import { b64ToBytes, bytesToB64 } from '../src/shared/hash.js';
 import { encryptChannelName } from '../src/shared/manifest.js';
 import { assignChannelKey, mintChannelKey } from '../src/shared/sharedchannel.js';
@@ -57,6 +58,27 @@ function grant(channelId: string, key: Uint8Array, name: string, read: boolean):
 
 function fakeClient(api: (method: string, path: string) => Promise<unknown>): ZasClient {
   return { identity, api: vi.fn(api) } as unknown as ZasClient;
+}
+
+/** A client that keeps every call, so a test can read what the server reported
+ *  about itself as well as what it asked for. */
+function recordingClient(answer: (path: string) => Promise<unknown>): {
+  client: ZasClient;
+  reported: () => Record<string, unknown>[];
+} {
+  const bodies: { path: string; body?: unknown }[] = [];
+  const client = {
+    identity,
+    api: vi.fn(async (_method: string, path: string, body?: unknown) => {
+      bodies.push({ path, body });
+      if (path === '/agents/telemetry') return undefined;
+      return answer(path);
+    }),
+  } as unknown as ZasClient;
+  return {
+    client,
+    reported: () => bodies.filter((c) => c.path === '/agents/telemetry').map((c) => c.body as Record<string, unknown>),
+  };
 }
 
 const PAIR_BLOCK = [
@@ -165,7 +187,72 @@ describe('buildServer', () => {
     expect(status.text).toContain('Trabajo · send · read');
     expect(status.text).toContain('Borradores · send');
     expect(status.text).toContain(agentVersion());
+    expect(status.text).toContain('telemetry: on (default)');
     await client.close();
+  });
+
+  it('registers exactly the tools the analytics vocabulary names', async () => {
+    // A tool added here and not there would report a property the schema drops,
+    // which is a silent hole. This is the test that closes it.
+    const client = await connect(buildServer('nobody'));
+    const { tools } = await client.listTools();
+    for (const tool of tools) {
+      expect(AGENT_TOOL_NAMES as readonly string[], tool.name).toContain(tool.name.replace(/^zas_/, ''));
+    }
+    expect(tools.length).toBe(AGENT_TOOL_NAMES.length);
+    await client.close();
+  });
+
+  it('reports what a tool call answered', async () => {
+    const { client: api, reported } = recordingClient(async () => ({ grants: [grant('c1', workKey, 'Trabajo', true)] }));
+    const client = await connect(buildServer('p', { identity, client: api }));
+    const status = await call(client, 'zas_status');
+    expect(status.isError).toBe(false);
+    expect(reported()).toEqual([{
+      event: 'agent.tool_call',
+      properties: expect.objectContaining({ tool: 'status', result: 'ok', code: 'none', duration_bucket: 'lt_1s' }),
+    }]);
+    await client.close();
+  });
+
+  it('reports the code a failed call answered with, and nothing about the file', async () => {
+    const { client: api, reported } = recordingClient(async () => { throw new ZasError('agent_revoked', 403); });
+    const client = await connect(buildServer('p', { identity, client: api }));
+    const refused = await call(client, 'zas_send_note', { text: 'hola', channel: 'Trabajo' });
+    expect(refused.isError).toBe(true);
+    expect(reported()).toEqual([{
+      event: 'agent.tool_call',
+      properties: expect.objectContaining({ tool: 'send_note', result: 'error', code: 'agent_revoked' }),
+    }]);
+    // The channel and the text the call carried are not in the report.
+    expect(JSON.stringify(reported())).not.toContain('hola');
+    expect(JSON.stringify(reported())).not.toContain('Trabajo');
+    await client.close();
+  });
+
+  it('reports nothing from a profile that is not paired', async () => {
+    const { client: api, reported } = recordingClient(async () => ({ grants: [] }));
+    const client = await connect(buildServer('nobody', { client: api }));
+    const status = await call(client, 'zas_status');
+    expect(status.text).toContain('zas-agent pair');
+    // No identity is no account, and an event with no account is an event
+    // nobody can act on.
+    expect(reported()).toEqual([]);
+    await client.close();
+  });
+
+  it('reports nothing when the owner turned it off', async () => {
+    process.env.ZAS_AGENT_TELEMETRY = '0';
+    try {
+      const { client: api, reported } = recordingClient(async () => ({ grants: [] }));
+      const client = await connect(buildServer('p', { identity, client: api }));
+      const status = await call(client, 'zas_status');
+      expect(status.text).toContain('telemetry: off (ZAS_AGENT_TELEMETRY)');
+      expect(reported()).toEqual([]);
+      await client.close();
+    } finally {
+      delete process.env.ZAS_AGENT_TELEMETRY;
+    }
   });
 
   it('reports a channel it cannot name by its id rather than dropping it', async () => {

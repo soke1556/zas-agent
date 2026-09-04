@@ -98,6 +98,7 @@ const IDENTITY_FILE = 'identity.json';
 const PENDING_FILE = 'pending.json';
 const GRANTS_FILE = 'grants.json';
 const FINGERPRINTS_FILE = 'fingerprints.json';
+const SETTINGS_FILE = 'settings.json';
 
 function agentHome(): string {
   return process.env.ZAS_AGENT_HOME || join(homedir(), '.zas', 'agent');
@@ -227,6 +228,30 @@ export function loadFingerprints(profile: string): FingerprintCache {
 
 export function saveFingerprints(profile: string, cache: FingerprintCache): void {
   writePrivate(profileDir(profile), FINGERPRINTS_FILE, cache);
+}
+
+/** What belongs to the machine rather than to one profile. A person decides
+ *  about telemetry once, and pairing again — which rewrites a profile whole —
+ *  must not undo that decision, so it lives next to the profile directories
+ *  instead of inside one. */
+export interface AgentSettings {
+  version: 1;
+  /** Absent means nobody chose, which reads as on. */
+  telemetry?: boolean;
+  decided_at?: number;
+  /** When the telemetry notice was last printed on this machine. */
+  notified_at?: number;
+}
+
+/** Disposable, like the other caches: a damaged file is no settings at all,
+ *  and the defaults stand. */
+export function loadSettings(): AgentSettings | null {
+  const stored = readCache<AgentSettings>(agentHome(), SETTINGS_FILE);
+  return isPlainObject(stored) ? stored as AgentSettings : null;
+}
+
+export function saveSettings(settings: AgentSettings): void {
+  writePrivate(agentHome(), SETTINGS_FILE, settings);
 }
 
 /** Read at call time, not at import: tests and the emulator set these after

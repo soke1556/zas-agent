@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { isInvokedDirectly, main, parseArgs } from '../src/cli.js';
+import { telemetryState } from '../src/telemetry.js';
 
 describe('isInvokedDirectly', () => {
   let dir = '';
@@ -66,5 +67,55 @@ describe('parseArgs', () => {
     const lines: string[] = [];
     expect(await main(['pair', '--profile', '../../elsewhere'], (line) => lines.push(line))).toBe(2);
     expect(lines.join('\n')).toContain('Invalid profile: ../../elsewhere');
+  });
+
+  it('reads the telemetry command and its one setting', () => {
+    expect(parseArgs(['telemetry']).command).toBe('telemetry');
+    expect(parseArgs(['telemetry']).telemetry).toBeUndefined();
+    expect(parseArgs(['telemetry', 'off'])).toMatchObject({ command: 'telemetry', telemetry: 'off' });
+    expect(parseArgs(['telemetry', 'on'])).toMatchObject({ command: 'telemetry', telemetry: 'on' });
+    // A typo is a question the person has to see, not a silent no-op.
+    expect(parseArgs(['telemetry', 'offf'])).toMatchObject({ command: 'invalid' });
+    // A flag after it is not a setting.
+    expect(parseArgs(['telemetry', '--profile', 'codex'])).toMatchObject({ command: 'telemetry', profile: 'codex' });
+  });
+});
+
+describe('the telemetry command', () => {
+  let home = '';
+
+  beforeEach(() => {
+    home = mkdtempSync(join(tmpdir(), 'zas-agent-cli-telemetry-'));
+    process.env.ZAS_AGENT_HOME = home;
+    delete process.env.ZAS_AGENT_TELEMETRY;
+    delete process.env.DO_NOT_TRACK;
+  });
+
+  afterEach(() => {
+    delete process.env.ZAS_AGENT_HOME;
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  it('says what this machine reports, and what it collects', async () => {
+    const lines: string[] = [];
+    expect(await main(['telemetry'], (line) => lines.push(line))).toBe(0);
+    const printed = lines.join('\n');
+    expect(printed).toContain('telemetry: on (default)');
+    expect(printed).toContain('to improve the product');
+    expect(printed).toContain('Never file names, file contents, paths or channel names.');
+    expect(printed).toContain('telemetry off');
+  });
+
+  it('turns it off, and says how to turn it back on', async () => {
+    const lines: string[] = [];
+    expect(await main(['telemetry', 'off'], (line) => lines.push(line))).toBe(0);
+    expect(telemetryState()).toEqual({ on: false, source: 'file' });
+    expect(lines.join('\n')).toContain('telemetry: off (zas-agent telemetry)');
+    expect(lines.join('\n')).toContain('Nothing is sent.');
+
+    lines.length = 0;
+    expect(await main(['telemetry', 'on'], (line) => lines.push(line))).toBe(0);
+    expect(telemetryState()).toEqual({ on: true, source: 'file' });
+    expect(lines.join('\n')).toContain('telemetry: on (zas-agent telemetry)');
   });
 });

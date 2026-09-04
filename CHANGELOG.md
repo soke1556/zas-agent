@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-09-03
+
+### Added
+
+- Usage reporting, so a defect like 0.5.0's — a release that could not
+  receive a file at all — is visible without somebody writing in. One report
+  after each tool call: the tool, whether it worked, the closed error code
+  when it did not, a duration bucket and the version. Never a file name, a
+  path, a channel name, a message or a stack. It goes to Zas, not to an
+  analytics service: this package holds no analytics token and opens no
+  connection to a third party.
+- `zas-agent telemetry [on|off]`, `ZAS_AGENT_TELEMETRY` and `DO_NOT_TRACK`.
+  Reporting is on by default; `pair` prints what it collects before it opens
+  a browser, the first `serve` on a machine prints it once, and `zas_status`
+  always says which way it is set. The choice lives in
+  `~/.zas/agent/settings.json` and survives pairing again.
+
 ## [0.5.1] - 2026-09-03
 
 ### Fixed

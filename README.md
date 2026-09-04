@@ -252,6 +252,36 @@ Two things worth knowing before you point a model at your account:
 Everything those tools touch lands inside your own account and your own
 machine. Revoking the agent stops all of them.
 
+## What it sends back
+
+This package reports how it is used, so defects like a release that could not
+receive a file at all stop being invisible. It is on by default and it is
+yours to turn off:
+
+```bash
+npx -y zas-agent telemetry off     # and `on` again, and `telemetry` to see
+```
+
+`ZAS_AGENT_TELEMETRY=0` and the cross-vendor `DO_NOT_TRACK=1` do the same
+without writing anything. The choice lives in `~/.zas/agent/settings.json` and
+covers every profile on the machine; pairing again does not reset it.
+`zas_status` always says which way it is set.
+
+What one report carries, and nothing else: the tool that ran, whether it
+worked, the closed error code when it did not, which of four duration buckets
+it fell in, and the package version. No file name, no file contents, no path,
+no channel name, no error message, no stack.
+
+Where it goes: to Zas, never to an analytics service directly. This package
+holds no analytics token and opens no connection to a third party, so no
+address of yours reaches one. The report is attributed to the Zas account the
+agent is paired with, which the server reads from the session — the request
+carries no identifier of its own. Nothing is reported before pairing, because
+until then there is no account it could belong to.
+
+A report is never allowed to matter: it is sent after the answer, waited on
+for at most five seconds, tried once, and dropped in silence if it fails.
+
 ## Data on disk
 
 One directory per profile, so one machine can hold a Claude Code agent and a
@@ -262,8 +292,8 @@ Codex agent side by side without either reading the other's keys:
 | macOS, Linux | `~/.zas/agent/<profile>/` |
 | Windows | `%USERPROFILE%\.zas\agent\<profile>\` |
 
-Four files, all written through a temporary file and renamed into place, so a
-crash mid-write cannot leave half a file behind:
+Four files in the profile directory, all written through a temporary file and
+renamed into place, so a crash mid-write cannot leave half a file behind:
 
 - `identity.json` — the agent uid, the owner uid, the name, and the two key
   pairs. Back it up like a private key, or delete it and pair again.
@@ -275,6 +305,12 @@ crash mid-write cannot leave half a file behind:
 - `fingerprints.json` — hashes of what an identical send produced in the last
   ten minutes, so a retried tool call answers without touching the network. It
   stores hashes, never a title or a note's first line. Disposable.
+
+One more file sits next to the profiles, in `~/.zas/agent/`:
+
+- `settings.json` — whether this machine reports usage, and when the notice
+  above was last printed. It belongs to the machine, not to a profile, so one
+  decision covers every agent on it.
 
 On macOS and Linux the directory is created `0700` and every file `0600`. On
 Windows those bits have no effect: the files carry the permissions of the user
@@ -306,6 +342,8 @@ agent: same keys, same channels, one row.
 | --- | --- | --- |
 | `--profile <name>` | `claude-code` | Which identity directory this process uses. Letters, digits, `.`, `_` and `-`, up to 64, and it may not start with a dot. |
 | `ZAS_AGENT_HOME` | `~/.zas/agent` | Where the profile directories live. |
+| `ZAS_AGENT_TELEMETRY` | unset | `0` turns usage reporting off for this process, `1` on. It outranks the stored choice. |
+| `DO_NOT_TRACK` | unset | `1` turns usage reporting off. Read only to turn it off. |
 | `ZAS_WEB_BASE` | `https://zas.red` | The web app the pairing URL points at. |
 | `ZAS_API_BASE` | `https://zas.red/api` | The API. |
 | `ZAS_TOKEN_BASE` | `https://zas.red/anon-token` | The challenge and token routes. |
@@ -313,7 +351,8 @@ agent: same keys, same channels, one row.
 | `ZAS_FIREBASE_PROJECT` | `zas-me` | The project whose Firestore the read path queries. |
 | `ZAS_FIREBASE_API_KEY` | the public web key | The key used to exchange a custom token for a session. |
 
-Only `--profile` and `ZAS_AGENT_HOME` are worth setting by hand. The rest exist
+Only `--profile`, `ZAS_AGENT_HOME` and the two telemetry switches are worth
+setting by hand. The rest exist
 so the package can be pointed at a test deployment.
 
 ## Development

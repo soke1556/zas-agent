@@ -17,7 +17,8 @@ import { defaultEndpoints, PROFILE_RE } from './identity.js';
 import { openInBrowser } from './open.js';
 import { runPair } from './pair.js';
 import { agentVersion, buildServer } from './server.js';
-import { kindForProfile } from './snippets.js';
+import { kindForProfile, packageName } from './snippets.js';
+import { markNoticeShown, noticeShown, setTelemetry, TELEMETRY_NOTICE, telemetryLine } from './telemetry.js';
 
 /** What a bare `zas-agent` and a bare `zas-agent pair` mean. The install
  *  snippets always pass `--profile`, so this only decides for someone typing
@@ -26,8 +27,10 @@ import { kindForProfile } from './snippets.js';
 const DEFAULT_PROFILE = 'claude-code';
 
 interface Parsed {
-  command: 'serve' | 'pair' | 'version' | 'help' | 'invalid';
+  command: 'serve' | 'pair' | 'telemetry' | 'version' | 'help' | 'invalid';
   profile: string;
+  /** `telemetry on` and `telemetry off`. Absent means "say what it is now". */
+  telemetry?: 'on' | 'off';
   kind?: AgentKind;
   host?: string;
   unknown?: string;
@@ -47,6 +50,17 @@ export function parseArgs(argv: string[]): Parsed {
     const inline = arg.startsWith('--') && eq > 0 ? arg.slice(eq + 1) : undefined;
     const take = (): string => (inline !== undefined ? inline : (argv[++i] ?? ''));
     if (name === 'pair') parsed.command = 'pair';
+    else if (name === 'telemetry') {
+      parsed.command = 'telemetry';
+      // The word after it is the setting, and only if it is one: `telemetry
+      // --profile x` is a state question about that profile's machine, and a
+      // typo is a question the person has to see, not a silent no-op.
+      const next = argv[i + 1];
+      if (next === 'on' || next === 'off') { parsed.telemetry = next; i++; }
+      else if (next !== undefined && !next.startsWith('--')) {
+        return { ...parsed, command: 'invalid', message: `Unknown telemetry setting “${next}”. Use “on” or “off”.` };
+      }
+    }
     else if (name === '--version' || name === '-v') parsed.command = 'version';
     else if (name === '--help' || name === '-h') parsed.command = 'help';
     else if (name === '--profile') {
@@ -76,6 +90,7 @@ const USAGE = [
   '  zas-agent [--profile <name>]                serve the MCP tools over stdio',
   '  zas-agent pair [--profile <name>]           pair this agent with a Zas account',
   '                 [--kind claude_code|codex|other] [--host <name>] [--no-open]',
+  '  zas-agent telemetry [on|off]                say what this machine reports, or change it',
   '  zas-agent --version',
 ].join('\n');
 
@@ -98,7 +113,23 @@ export async function main(argv: string[], log: (line: string) => void = (l) => 
     return args.unknown ? 2 : 0;
   }
 
+  if (args.command === 'telemetry') {
+    if (args.telemetry) setTelemetry(args.telemetry === 'on');
+    markNoticeShown();
+    log(telemetryLine());
+    log(args.telemetry === 'off'
+      ? `Nothing is sent. Turn it on again with: npx -y ${packageName()} telemetry on`
+      : TELEMETRY_NOTICE);
+    return 0;
+  }
+
   if (args.command === 'pair') {
+    // Before the first request of the flow, and before a browser opens: a
+    // person is at this terminal now, which is the only moment the notice is
+    // certain to be read.
+    log(TELEMETRY_NOTICE);
+    log('');
+    markNoticeShown();
     // A prompt only where somebody can answer it: an MCP client, a script or a
     // pipe has no person on stdin, and a question there would hang forever.
     let rl: Interface | null = null;
@@ -137,6 +168,12 @@ export async function main(argv: string[], log: (line: string) => void = (l) => 
     return 0;
   }
 
+  // Somebody who upgraded never runs `pair` again. Once per machine, on the
+  // way into serving, the notice goes to stderr where the client keeps its log.
+  if (!noticeShown()) {
+    log(TELEMETRY_NOTICE);
+    markNoticeShown();
+  }
   await buildServer(args.profile).connect(new StdioServerTransport());
   // The transport owns the process from here: it holds stdin open, and the
   // client closing it is what ends the run.
