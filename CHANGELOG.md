@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.2] - 2026-09-04
+
+### Added
+
+- The trace records the peer connection state, not only the ICE state.
+  ICE `connected` means a candidate pair answered; the peer connection
+  reaches `connected` only once DTLS completes. A session that holds an ICE
+  path and sends nothing over it used to look the same as one that never
+  found a path at all.
+- A failure that had a working ICE pair is now `channel_never_opened`, not
+  `connect_timeout`. Same clock, different fault: one is the candidate hunt,
+  the other is the handshake above it.
+- The verdict line carries the peer connection state and the data channel's
+  own state, so a stalled DTLS handshake and a stalled SCTP association can
+  be told apart from one line.
+- The selected candidate pair is read when ICE connects, not only when the
+  data channel opens. A run that connected and then went quiet reported
+  `pair=none` and looked as if it had never selected one.
+- `onicecandidateerror` is traced, by URL shape and error code only. A
+  gather that ends with no relay candidate now says whether the allocation
+  was refused or never answered.
+
 ## [0.6.1] - 2026-09-04
 
 ### Added
@@ -183,7 +205,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   two separate identities that cannot read each other's keys.
 - Install snippets for Claude Code and Codex, printed by `zas-agent pair`.
 
-[Unreleased]: https://github.com/soke1556/zas-agent/compare/v0.6.1...HEAD
+[Unreleased]: https://github.com/soke1556/zas-agent/compare/v0.6.2...HEAD
+[0.6.2]: https://github.com/soke1556/zas-agent/compare/v0.6.1...v0.6.2
 [0.6.1]: https://github.com/soke1556/zas-agent/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/soke1556/zas-agent/compare/v0.5.1...v0.6.0
 [0.5.1]: https://github.com/soke1556/zas-agent/compare/v0.5.0...v0.5.1

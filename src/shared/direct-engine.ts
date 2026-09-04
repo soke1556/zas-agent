@@ -68,8 +68,9 @@ export interface DirectHandle {
  *  can already read it. */
 export interface DirectDiag {
   /** Why it failed — '' on success. Closed set: peer_silent, connect_timeout,
-   *  ice_failed, disconnected, peer_closed, peer_abort, signaling,
-   *  signal_send, protocol, sink, transfer, too_big. */
+   *  ice_failed, channel_never_opened, disconnected, peer_closed,
+   *  peer_abort, signaling, signal_send, protocol, sink, transfer,
+   *  too_big. */
   reason: string;
   /** The thrown error's own message, when the failure came from an exception
    *  rather than a decision. `reason` has to stay a closed set — telemetry
@@ -180,14 +181,44 @@ function traceAdd(diag: DirectDiag, line: string): void {
  *  every URL, counted. The host names are the relay operator's and the
  *  credentials are metered, so neither belongs in something a person pastes
  *  into a channel. `stun:x?transport=udp` and a bare `stun:x` are one shape. */
+/** The ICE transport policy a receiver should run under.
+ *
+ *  An agent peer writes its offer and its whole candidate set into the
+ *  exchange and leaves, so the receiving end holds the complete remote set
+ *  the moment it claims: checking starts in the same tick as the local
+ *  description and the LAN host pair validates about ten milliseconds later.
+ *  Chrome then stops the TURN allocations still in flight and reports
+ *  gathering complete with no relay candidate at all — measured 2026-09-04,
+ *  in every run where that pair came up, against runs minutes apart where it
+ *  did not and eight relay candidates arrived on schedule at 100 ms.
+ *
+ *  The pair Chrome keeps is worthless. The agent cannot resolve this end's
+ *  mDNS `.local` address, so the path is one-way: it comes up, carries no
+ *  bytes, and dies inside five seconds with no successor left to try.
+ *
+ *  Relay-only removes the pair that causes both problems, and relay/relay is
+ *  what every transfer that works on this network settles on anyway. With no
+ *  relay server to use it falls back to `all`, because a relay-only session
+ *  with nothing to relay through cannot connect at all.
+ */
+export function receiverIcePolicy(
+  viaAgent: boolean,
+  turnServers: number,
+): RTCIceTransportPolicy {
+  return viaAgent && turnServers > 0 ? 'relay' : 'all';
+}
+function urlShape(url: string): string {
+  const scheme = /^(stuns?|turns?):/i.exec(url)?.[1]?.toLowerCase() ?? 'other';
+  const transport = /[?&]transport=(\w+)/i.exec(url)?.[1]?.toLowerCase();
+  return transport ? `${scheme}/${transport}` : scheme;
+}
+
 function iceShapes(servers: RTCIceServer[] | undefined): string {
   const seen = new Map<string, number>();
   for (const server of servers ?? []) {
     const urls = typeof server.urls === 'string' ? [server.urls] : server.urls;
     for (const url of urls ?? []) {
-      const scheme = /^(stuns?|turns?):/i.exec(url)?.[1]?.toLowerCase() ?? 'other';
-      const transport = /[?&]transport=(\w+)/i.exec(url)?.[1]?.toLowerCase();
-      const shape = transport ? `${scheme}/${transport}` : scheme;
+      const shape = urlShape(url);
       seen.set(shape, (seen.get(shape) ?? 0) + 1);
     }
   }
@@ -324,6 +355,27 @@ function session(
   pc.onicegatheringstatechange = () => {
     traceAdd(diag, `gather ${String((pc as { iceGatheringState?: string }).iceGatheringState ?? '')}`);
   };
+  // ICE connected only says a candidate pair answered. The peer connection
+  // state is the layer above: on both the browser and node-datachannel it
+  // reaches `connected` when DTLS completes, so a session that sits at
+  // `connecting` here has an ICE path nothing can be sent over. Without this
+  // line a stalled handshake and a stalled SCTP association look identical.
+  const connState = () => String((pc as { connectionState?: string }).connectionState ?? '');
+  (pc as { onconnectionstatechange?: (() => void) | null }).onconnectionstatechange = () => {
+    traceAdd(diag, `conn ${connState()}`);
+  };
+  // The data channel is the sender's or the receiver's, not the session's,
+  // so it is handed over once it exists. Only its state is read.
+  let channel: RTCDataChannel | undefined;
+  // A gather that ends with no relay candidate does not say why. This does:
+  // 401 is a credential the relay refused, 701 an allocation that failed, and
+  // no line at all means the allocation was never answered — or never
+  // attempted, which is a different bug entirely. Shape and code only; the
+  // URL's host and the error text belong to the relay operator.
+  (pc as { onicecandidateerror?: ((e: Event) => void) | null }).onicecandidateerror = (e: Event) => {
+    const err = e as Event & { errorCode?: number; url?: string };
+    traceAdd(diag, `ice error ${err.url ? urlShape(err.url) : '?'} code=${err.errorCode ?? '?'}`);
+  };
 
   const cleanup = () => {
     clearTimeout(waitTimer);
@@ -333,6 +385,8 @@ function session(
     pc.onicecandidate = null;
     pc.oniceconnectionstatechange = null;
     pc.onicegatheringstatechange = null;
+    (pc as { onicecandidateerror?: ((e: Event) => void) | null }).onicecandidateerror = null;
+    (pc as { onconnectionstatechange?: (() => void) | null }).onconnectionstatechange = null;
     pc.close();
   };
   const setPhase = (p: DirectPhase) => {
@@ -346,7 +400,12 @@ function session(
       diag.gatherState = String((pc as { iceGatheringState?: string }).iceGatheringState ?? '');
       diag.hadRemoteDesc = hasRemoteDescription(pc);
       diag.turnUrlsConfigured = countTurnUrls(pc.getConfiguration().iceServers);
-      traceAdd(diag, `${p}${diag.reason ? ` ${diag.reason}` : ''} ice=${diag.iceState} gather=${diag.gatherState}`);
+      traceAdd(
+        diag,
+        `${p}${diag.reason ? ` ${diag.reason}` : ''} ice=${diag.iceState}`
+          + ` gather=${diag.gatherState} conn=${connState()}`
+          + ` chan=${channel === undefined ? '-' : String(channel.readyState ?? '')}`,
+      );
       onDiag?.(diag);
       onPhase(p);
       cleanup();
@@ -377,7 +436,13 @@ function session(
     if (heard) return;
     heard = true;
     clearTimeout(waitTimer);
-    connectTimer = setTimeout(() => fail('connect_timeout'), DIRECT_CONNECT_TIMEOUT_MS);
+    connectTimer = setTimeout(() => {
+      // A pair answered but no channel ever opened: the candidate hunt
+      // succeeded and the layer above it did not. Same clock, different
+      // fault, and telemetry groups on the word — so it gets its own.
+      const iceUp = pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed';
+      fail(iceUp ? 'channel_never_opened' : 'connect_timeout');
+    }, DIRECT_CONNECT_TIMEOUT_MS);
   };
 
   // A path that dies mid-flight is not a dead transfer: the DTLS/SCTP
@@ -424,6 +489,19 @@ function session(
       clearTimeout(disconnectTimer);
       clearTimeout(restartTimer);
       stallState = 'idle';
+      // Until now the pair was only read when the channel opened, so a run
+      // that connected and then went quiet reported `pair=none` and looked
+      // like it had never selected one. Read it here too.
+      void pc
+        .getStats()
+        .then((stats) => {
+          const pair = pairFromStats(stats);
+          if (!pair || diag.pairLocal) return;
+          diag.pairLocal = pair.local;
+          diag.pairRemote = pair.remote;
+          traceAdd(diag, `pair ${pair.local}/${pair.remote}`);
+        })
+        .catch(() => undefined);
     }
   };
 
@@ -443,6 +521,7 @@ function session(
       }
     },
     isTerminal: () => phase === 'done' || phase === 'failed',
+    setChannel: (dc: RTCDataChannel) => void (channel = dc),
     setStall: (fn: () => void, windowMs: number) => {
       onStall = fn;
       stallWindowMs = windowMs;
@@ -569,6 +648,7 @@ export function startSender(opts: SenderOpts): DirectHandle {
   }, DIRECT_CONNECT_TIMEOUT_MS);
 
   const dc = pc.createDataChannel('zas-direct', { ordered: true });
+  s.setChannel(dc);
   dc.binaryType = 'arraybuffer';
   // Resume well before empty: the reader refills while SCTP drains the rest,
   // so the wire never sits idle between pauses.
@@ -777,6 +857,7 @@ export function startReceiver(opts: ReceiverOpts): DirectHandle {
 
   pc.ondatachannel = (e) => {
     dc = e.channel;
+    s.setChannel(dc);
     dc.binaryType = 'arraybuffer';
     dc.onopen = () => {
       s.connected();
