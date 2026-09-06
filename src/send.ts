@@ -36,8 +36,8 @@ export interface SendContext {
   batch?: number;
 }
 
-export interface SendFileInput { path: string; channel?: string; title?: string }
-export interface SendNoteInput { text: string; channel?: string; title?: string; lang?: string; secret?: boolean }
+export interface SendFileInput { path: string; channel?: string; title?: string; expires_in_days?: number }
+export interface SendNoteInput { text: string; channel?: string; title?: string; lang?: string; secret?: boolean; expires_in_days?: number }
 
 export interface SendResult {
   link_id: string;
@@ -157,6 +157,20 @@ async function grantFor(ctx: SendContext, channel: string | undefined): Promise<
 async function receiptKey(ctx: SendContext, channelId: string, contentHash: string, title: string): Promise<string> {
   const raw = `${ctx.identity.agent_uid}\0${channelId}\0${contentHash}\0${title}`;
   return blake3Hex(new TextEncoder().encode(raw));
+}
+
+/** The identity of one send: what was sent, and how long it was asked to live
+ *  for. The bytes alone are not it. Both replay guards key on this string —
+ *  the local receipt and the server's idempotency key — and without the
+ *  lifetime in it, "send that again, but for one day" matches the receipt of
+ *  the five-day send and answers from disk with the old item's id, having
+ *  created nothing.
+ *
+ *  A send that asks for nothing hashes to exactly the content hash it always
+ *  did, so every receipt written before this existed still matches. */
+async function sendIdentity(contentHash: string, days: number | undefined): Promise<string> {
+  if (days === undefined) return contentHash;
+  return blake3Hex(new TextEncoder().encode(`${contentHash}\0expires_in_days:${days}`));
 }
 
 function receiptFor(ctx: SendContext, key: string): SendReceipt | undefined {
@@ -393,6 +407,7 @@ async function postLink(
   manifest: Manifest,
   placed: Placed[],
   idempotencyKey: string,
+  expiresInDays?: number,
 ): Promise<string> {
   const channelKey = channelKeyOf(ctx.identity, grant);
   const sealed = sealManifest(channelKey, manifest, grant.key_version);
@@ -405,6 +420,9 @@ async function postLink(
     // server reads it, and an absent array is not the same as an empty one.
     proofs: [],
     idempotency_key: idempotencyKey,
+    // Absent unless the caller asked. The server clamps whatever arrives to
+    // the account's own plan, so this can only ever shorten the item's life.
+    ...(expiresInDays === undefined ? {} : { expires_in_days: expiresInDays }),
   });
 
   // The link answers with caps bound to it, covering every chunk — including
@@ -459,7 +477,7 @@ export async function sendFile(
   // The stat above is the cheap early exit; the file may have grown since.
   if (file.byteLength > MAX_FILE_BYTES) throw new ZasError('file_too_big', 413);
   const bytes = new Uint8Array(file.buffer, file.byteOffset, file.byteLength);
-  const contentHash = await blake3Hex(bytes);
+  const contentHash = await sendIdentity(await blake3Hex(bytes), input.expires_in_days);
   const key = await receiptKey(ctx, grant.channel_id, contentHash, title);
   const stored = receiptFor(ctx, key);
   if (stored) {
@@ -516,6 +534,7 @@ export async function sendFile(
   });
   const linkId = await postLink(
     ctx, grant, manifest, placed, agentSendIdempotencyKey(grant.channel_id, contentHash, title),
+    input.expires_in_days,
   );
 
   const deduplicated = placed.filter((p) => p.proven).length;
@@ -548,9 +567,12 @@ export async function sendNote(ctx: SendContext, input: SendNoteInput): Promise<
   // the agent answered from disk, and the item in the channel kept no
   // `sensitive` flag at all. Past the receipt window the server's own
   // idempotency key did the same thing, and it does not rewrite a manifest.
-  const contentHash = await blake3Hex(new TextEncoder().encode(
-    `${input.lang ?? ''}\0${input.secret ? '1' : '0'}\0${input.text}`,
-  ));
+  const contentHash = await sendIdentity(
+    await blake3Hex(new TextEncoder().encode(
+      `${input.lang ?? ''}\0${input.secret ? '1' : '0'}\0${input.text}`,
+    )),
+    input.expires_in_days,
+  );
   const key = await receiptKey(ctx, grant.channel_id, contentHash, name);
   const stored = receiptFor(ctx, key);
   if (stored) {
@@ -581,6 +603,7 @@ export async function sendNote(ctx: SendContext, input: SendNoteInput): Promise<
   });
   const linkId = await postLink(
     ctx, grant, manifest, [], agentSendIdempotencyKey(grant.channel_id, contentHash, name),
+    input.expires_in_days,
   );
 
   remember(ctx, key, {

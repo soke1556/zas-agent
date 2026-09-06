@@ -36,33 +36,48 @@ get a short-lived session.
 
 ## Install
 
-Pair the agent first, then hand the command to your harness.
+Install [Node.js LTS](https://nodejs.org/en/download) (22 or newer) and your
+agent's command-line tool first. Reopen your terminal after installing.
+Run these commands on the computer where you use the agent.
 
-**Pair**
+Choose your agent and pair it. On Windows (PowerShell or CMD):
+
+**Codex**
 
 ```
-npx -y zas-agent pair --profile claude-code
+npx.cmd -y zas-agent@latest pair --profile codex
 ```
 
 **Claude Code**
 
 ```
-claude mcp add zas "--" npx -y zas-agent --profile claude-code
+npx.cmd -y zas-agent@latest pair --profile claude-code
 ```
+
+Open the printed link, approve the channels, and enter the code in the terminal
+if the page shows one. Leave the terminal open until pairing finishes.
+Then run the matching registration command:
 
 **Codex**
 
 ```
-codex mcp add zas "--" npx -y zas-agent --profile codex
+cmd /d /c codex mcp add zas "--" npx.cmd -y zas-agent@latest --profile codex
 ```
 
-Codex by hand, if you would rather edit `~/.codex/config.toml`:
+**Claude Code**
 
-```toml
-[mcp_servers.zas]
-command = "npx"
-args = ["-y", "zas-agent", "--profile", "codex"]
 ```
+cmd /d /c claude mcp add zas "--" npx.cmd -y zas-agent@latest --profile claude-code
+```
+
+On macOS, Linux, or WSL, use `npx` in place of `npx.cmd` and omit
+`cmd /d /c `. Pair and register in the same environment. Restart your agent
+and ask it to send something to Zas.
+
+If a command is not recognized, install Node.js or the named agent's CLI and
+reopen the terminal. The first download needs internet access and may take a
+few minutes. Use `@latest` as shown so npm requests the published package
+instead of selecting an unbuilt local workspace.
 
 ### What pairing does
 

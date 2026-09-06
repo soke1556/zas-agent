@@ -209,6 +209,89 @@ export function receiverIcePolicy(
 ): RTCIceTransportPolicy {
   return viaAgent && turnServers > 0 ? 'relay' : 'all';
 }
+
+/** Is this url worth gathering from when nothing but a relay candidate can be
+ *  used? A STUN url only ever produces a server-reflexive candidate, which
+ *  relay-only discards, so it is never worth it. A TURN url is, unless it sits
+ *  on port 53 — see `onPort53`. */
+function usableForRelay(url: string): boolean {
+  const scheme = /^(stuns?|turns?):/i.exec(url)?.[1]?.toLowerCase();
+  if (scheme !== 'turn' && scheme !== 'turns') return false;
+  return !onPort53(url);
+}
+
+/** The service publishes STUN and TURN on port 53 so that a network which
+ *  passes nothing but DNS still has a path. Chromium 152 gets no candidate from
+ *  a port-53 url and lets that url spoil the rest of the gather — see
+ *  `withoutPort53`. Matches the port, not the host, and ignores any
+ *  `?transport=` suffix. */
+function onPort53(url: string): boolean {
+  return /^(stuns?|turns?):[^?]*:53(\?|$)/i.test(url);
+}
+
+/** The ICE list minus every url on port 53, STUN and TURN alike. A server left
+ *  with no url is dropped.
+ *
+ *  **Chromium 152 produces no candidate from a url on port 53, and one such url
+ *  spoils the whole gather.** The network is not at fault: Chromium 151 on the
+ *  same machine allocates a relay on `turn:...:53` in 84-210 ms and gets a
+ *  server-reflexive candidate from `stun:...:53`, and the agent (libjuice)
+ *  allocates on `:53` too. On 152 the `:53` entries produce nothing, the
+ *  end-of-candidates marker waits until ~40 s, and — the part that matters —
+ *  the UDP relay that `turn:...:3478?transport=udp` would have given and the
+ *  server-reflexive candidate that `stun:...:3478` would have given never
+ *  appear either. Only TCP and TLS relays survive.
+ *
+ *  Measured 2026-09-05 against the live service, Chrome 152.0.7977.76 and
+ *  Brave 152 (identical results), 2 runs each. Relay-only:
+ *
+ *    production turn list       gather never completes,  8 relays, 0 over UDP
+ *    the same, minus :53        complete in 207-214 ms,  9 relays, 1 over UDP
+ *    turn udp 3478 + udp 53     gather never completes,  0 relays
+ *    turn udp 3478 alone        complete in 215-227 ms,  1 relay,  1 over UDP
+ *
+ *  Policy `all`, 8 s window:
+ *
+ *    production list            still gathering; relay/tcp and relay/tls only
+ *    the same, minus :53        complete in 119 ms; srflx 7 ms, relay/udp 66 ms
+ *    stun :53 + stun :3478      still gathering; no srflx at all
+ *
+ *  Bundled Chromium 151.0.7922.34, same box, same minute, same credentials:
+ *  the production list completes in 427 ms with 10 relays, 2 of them over UDP,
+ *  and srflx arrives in 6-24 ms whatever the list.
+ *
+ *  Why the UDP relay matters: a relay allocated over UDP and one allocated over
+ *  TCP or TLS cannot exchange a packet — measured the same day, both ends
+ *  relay-only, three runs: udp<->udp opened in 293/109/142 ms, tcp<->tcp in
+ *  106/174/161 ms, and both mixed orders never opened. An agent (libjuice)
+ *  allocates only over UDP, so a browser left with TCP relays alone can never
+ *  pair with one. Two browsers both make TCP relays and do pair, which is why
+ *  browser-to-browser still worked on 152 — but the three 152<->152 pairs in
+ *  production connected in 10.6-10.8 s where a pair with a 151 takes 1.3-2.5 s.
+ *
+ *  Cost: on a network that carries port 53 but not 3478, this removes a
+ *  working url. Such a network keeps `turn:...:80` and `turns:...:443`, which
+ *  is the usual escape, and on 152 the `:53` url produced nothing anyway. */
+export function withoutPort53(servers: RTCIceServer[]): RTCIceServer[] {
+  return keepUrls(servers, (url) => !onPort53(url));
+}
+
+/** `withoutPort53` for a relay-only session: STUN goes too, because relay-only
+ *  throws every server-reflexive candidate away and the url would only cost
+ *  gather time. */
+export function relayIceServers(servers: RTCIceServer[]): RTCIceServer[] {
+  return keepUrls(servers, usableForRelay);
+}
+
+function keepUrls(servers: RTCIceServer[], keep: (url: string) => boolean): RTCIceServer[] {
+  const kept: RTCIceServer[] = [];
+  for (const server of servers) {
+    const urls = typeof server.urls === 'string' ? [server.urls] : (server.urls ?? []);
+    const usable = urls.filter(keep);
+    if (usable.length > 0) kept.push({ ...server, urls: usable });
+  }
+  return kept;
+}
 function urlShape(url: string): string {
   const scheme = /^(stuns?|turns?):/i.exec(url)?.[1]?.toLowerCase() ?? 'other';
   const transport = /[?&]transport=(\w+)/i.exec(url)?.[1]?.toLowerCase();
@@ -354,8 +437,26 @@ function session(
   onPhase: (p: DirectPhase) => void,
   onDiag?: (d: DirectDiag) => void,
   iceTransportPolicy: RTCIceTransportPolicy = 'all',
+  skipPort53Urls = false,
 ) {
-  const initialIce = ice ?? DIRECT_ICE;
+  // Chromium 152 gets nothing from an ICE url on port 53 and lets it spoil the
+  // rest of the gather — see `withoutPort53`. Only for a browser known to do
+  // that: Chromium 151 and earlier gather the untrimmed list correctly, and
+  // their second UDP relay costs nothing. Relay-only also sheds STUN, which it
+  // could never use.
+  //
+  // If the service ever answers with TURN on port 53 and nothing else, the
+  // relay-only trim would leave no relay server and not one candidate to offer.
+  // A gather that stalls in one browser beats a session that cannot connect in
+  // any, so the untrimmed list stays in that case. Under `all` the host path
+  // is always there, so nothing needs keeping.
+  const trimIce = (servers: RTCIceServer[]) => {
+    if (!skipPort53Urls) return servers;
+    if (iceTransportPolicy !== 'relay') return withoutPort53(servers);
+    const trimmed = relayIceServers(servers);
+    return countTurnUrls(trimmed) > 0 ? trimmed : servers;
+  };
+  const initialIce = trimIce(ice ?? DIRECT_ICE);
   const pc = new RTCPeerConnection({
     iceServers: initialIce,
     iceTransportPolicy,
@@ -385,6 +486,18 @@ function session(
   };
   traceStart.set(diag, startedAt);
   traceAdd(diag, `ice servers ${iceShapes(initialIce)} policy=${iceTransportPolicy}`);
+  // The selected pair is read twice — when ICE connects and when the channel
+  // opens — and the two reads can disagree: a local `srflx` is re-identified
+  // as `prflx` once the peer's check reveals the same address. The summary
+  // carries the last read, so the trace has to say when it changed, or the
+  // two name one pair two ways (seen 2026-09-05 on two of three Mac runs).
+  const notePair = (pair: { local: string; remote: string }) => {
+    if (diag.pairLocal === pair.local && diag.pairRemote === pair.remote) return;
+    const changed = diag.pairLocal !== undefined;
+    diag.pairLocal = pair.local;
+    diag.pairRemote = pair.remote;
+    traceAdd(diag, `${changed ? 'pair now' : 'pair'} ${pair.local}/${pair.remote}`);
+  };
   pc.onicegatheringstatechange = () => {
     traceAdd(diag, `gather ${String((pc as { iceGatheringState?: string }).iceGatheringState ?? '')}`);
   };
@@ -580,10 +693,7 @@ function session(
         .getStats()
         .then((stats) => {
           const pair = pairFromStats(stats);
-          if (!pair || diag.pairLocal) return;
-          diag.pairLocal = pair.local;
-          diag.pairRemote = pair.remote;
-          traceAdd(diag, `pair ${pair.local}/${pair.remote}`);
+          if (pair) notePair(pair);
         })
         .catch(() => undefined);
     }
@@ -610,10 +720,14 @@ function session(
       onStall = fn;
       stallWindowMs = windowMs;
     },
+    notePair,
     setIceServers: (iceServers: RTCIceServer[]) => {
-      diag.turnUrlsSupplied = countTurnUrls(iceServers);
-      traceAdd(diag, `ice servers replaced ${iceShapes(iceServers)}`);
-      pc.setConfiguration({ iceServers });
+      // An ICE restart re-gathers from scratch, so the trim has to hold here
+      // too or the restart reintroduces the url the first gather avoided.
+      const next = trimIce(iceServers);
+      diag.turnUrlsSupplied = countTurnUrls(next);
+      traceAdd(diag, `ice servers replaced ${iceShapes(next)}`);
+      pc.setConfiguration({ iceServers: next });
     },
   };
 }
@@ -707,6 +821,10 @@ export interface SenderOpts {
   name?: string;
   ice?: RTCIceServer[];
   iceTransportPolicy?: RTCIceTransportPolicy;
+  /** This browser gets nothing from an ICE url on port 53 and lets it spoil the
+   *  rest of the gather (Chromium 152), so those urls come out before the
+   *  gather starts — see `session`. */
+  skipPort53Urls?: boolean;
   refreshIce?: () => Promise<RTCIceServer[]>;
   send: (msg: SignalMsg) => Promise<void>;
   onPhase: (p: DirectPhase) => void;
@@ -716,7 +834,9 @@ export interface SenderOpts {
 }
 
 export function startSender(opts: SenderOpts): DirectHandle {
-  const s = session(opts.ice, opts.onPhase, opts.onDiag, opts.iceTransportPolicy);
+  const s = session(
+    opts.ice, opts.onPhase, opts.onDiag, opts.iceTransportPolicy, opts.skipPort53Urls,
+  );
   opts.onPhase('connecting');
   const { pc } = s;
   const plumbing = signalPlumbing(pc, opts.send, () => s.fail('signal_send'), s.diag);
@@ -814,8 +934,7 @@ export function startSender(opts: SenderOpts): DirectHandle {
       .then((stats) => {
         const pair = pairFromStats(stats);
         if (!pair) return;
-        s.diag.pairLocal = pair.local;
-        s.diag.pairRemote = pair.remote;
+        s.notePair(pair);
         opts.onPath?.(pathOf(pair));
       })
       .catch(() => undefined);
@@ -896,6 +1015,10 @@ export interface Sink {
 export interface ReceiverOpts {
   ice?: RTCIceServer[];
   iceTransportPolicy?: RTCIceTransportPolicy;
+  /** This browser gets nothing from an ICE url on port 53 and lets it spoil the
+   *  rest of the gather (Chromium 152), so those urls come out before the
+   *  gather starts — see `session`. */
+  skipPort53Urls?: boolean;
   refreshIce?: () => Promise<RTCIceServer[]>;
   expectedMeta?: DirectMeta;
   send: (msg: SignalMsg) => Promise<void>;
@@ -928,6 +1051,7 @@ export function startReceiver(opts: ReceiverOpts): DirectHandle {
     },
     opts.onDiag,
     opts.iceTransportPolicy,
+    opts.skipPort53Urls,
   );
   // Stalls are the sender's to repair (it owns the offer); this end only
   // has to outwait the repair, so it gets double the window.
@@ -961,8 +1085,7 @@ export function startReceiver(opts: ReceiverOpts): DirectHandle {
         .then((stats) => {
           const pair = pairFromStats(stats);
           if (!pair) return;
-          s.diag.pairLocal = pair.local;
-          s.diag.pairRemote = pair.remote;
+          s.notePair(pair);
           opts.onPath?.(pathOf(pair));
         })
         .catch(() => undefined);

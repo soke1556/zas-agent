@@ -20,6 +20,7 @@ import {
   type SignalMsg,
 } from './shared/direct-engine.js';
 import { directMetaOf, type DirectMeta } from './shared/direct-protocol.js';
+import { directFileFrom } from './file-source.js';
 import { createFallbackMeta, uploadFallback, type PutPart } from './shared/direct-fallback.js';
 import { ZasError } from './errors.js';
 import { channelKeyOf, channelNameOf, grantsFor, resolveChannel } from './grants.js';
@@ -182,10 +183,15 @@ export async function sendDirect(
   // type and handed another stops the transfer. `openAsBlob` gives a file no
   // type of its own, so every offer this agent made used to say `image/png`
   // and deliver `application/octet-stream`.
-  const file = await (deps.openFile ?? openAsBlob)(input.path, { type: mimeFor(input.path) })
+  const raw = await (deps.openFile ?? openAsBlob)(input.path, { type: mimeFor(input.path) })
     .catch(() => {
       throw new ZasError('upload_failed', 400);
     });
+  // `openAsBlob` truncates Blob.size to 32 bits for a file of 4 GiB or more,
+  // and its slice() clamps to that, so it would offer the size mod 2^32 and
+  // pump only the first gigabytes. Trust the on-disk size and read by offset;
+  // a file under 4 GiB is handed back untouched.
+  const file = directFileFrom(input.path, raw);
   if (file.size > DIRECT_FILE_MAX_BYTES) throw new ZasError('file_too_big', 413);
   const name = basename(input.path);
   const cid = grant.channel_id;

@@ -3,7 +3,7 @@
 // fallback it can run afterwards. The engine itself is the web's and has its
 // own tests; the production run is the proof that the two fit.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { b64ToBytes, bytesToB64 } from '../src/shared/hash.js';
@@ -148,6 +148,25 @@ describe('sendDirect', () => {
     expect(open(offer.body!.meta_enc as string)).toEqual({ name: 'hello.txt', size: 5, mime: 'text/plain' });
     expect(open(offer.body!.sender_label_enc as string)).toBe('Claude Code');
     expect(offer.body).toMatchObject({ key_version: 1, size_bytes: 5, device: 'device-token-0001', owner_uid: 'owner-1' });
+
+    // The offer and the wire carry the true on-disk size even when the opened
+    // blob under-reports it, the way `openAsBlob` does for a file of 4 GiB or
+    // more. A real file on disk, an opener that lies low like the truncation.
+    {
+      const wire2 = fakeWire();
+      const ctx2: SendContext = { identity, client: wire2.client, profile: 'p' };
+      const big = join(home, 'huge.bin');
+      const real = new Uint8Array(3000);
+      for (let i = 0; i < real.length; i++) real[i] = i % 251;
+      writeFileSync(big, real);
+      const eng2 = fakeEngine('done', '', 30);
+      const truncating: DirectDeps['openFile'] = async (_p, options) => new Blob([real.subarray(0, 1000)], options);
+      await sendDirect(ctx2, { path: big }, () => undefined, deps({ engine: eng2.engine, openFile: truncating }));
+      const offer2 = wire2.calls.find((c) => c.path === '/direct/ch1')!;
+      expect(offer2.body).toMatchObject({ size_bytes: 3000 });
+      expect(open(offer2.body!.meta_enc as string)).toMatchObject({ size: 3000 });
+      expect(eng2.opts()!.file.size).toBe(3000);
+    }
 
     const signal = wire.calls.find((c) => c.path === '/direct/ch1/o1/signal')!;
     expect(signal.body).toMatchObject({ for: 'receiver', device: 'device-token-0001', owner_uid: 'owner-1' });

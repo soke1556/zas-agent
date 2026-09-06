@@ -7,6 +7,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-09-05
+
+### Added
+
+- `expires_in_days` on `zas_send_file` and `zas_send_note`. An agent can ask
+  an item to live for as little as one whole day — worth setting for output
+  that is stale tomorrow, such as a build log, a test run, or a screenshot of
+  a bug already fixed, so a channel is not left holding five days of noise.
+  It can only ever shorten an item. The server clamps the request to what the
+  account's plan grants, so asking for longer is answered with the plan's own
+  life rather than refused.
+- The lifetime is part of a send's identity. Both replay guards — the receipt
+  on disk and the server's idempotency key — hash it in, so "send that again,
+  but for one day" no longer matches the five-day receipt and answers with the
+  old item's id, having created nothing. A send that asks for nothing hashes
+  exactly as it did before, so every receipt already on disk still matches.
+
+### Fixed
+
+- A Directo send of a file of 4 GiB or more delivered only its first
+  gigabytes, and both ends agreed the transfer was whole. Node's `openAsBlob`
+  truncates `Blob.size` to 32 bits and its own `slice()` clamps to that
+  truncated size, so a 9 GiB file offered 1 GiB and sent 1 GiB. The sender now
+  trusts the on-disk size and reads true 64-bit offsets. A file under 4 GiB is
+  handed to the engine exactly as it was.
+- A receiver restricted to relay candidates could not gather at all, so a
+  browser on a `relay` transport policy never received from an agent. Its ICE
+  is trimmed only when it genuinely cannot allocate over UDP.
+- Chromium 152 returns no candidate from an ICE url on port 53, and that url
+  also suppresses the UDP relay and the server-reflexive candidate, so a
+  browser on that version could not reach an agent at all. The port-53 urls
+  are dropped for Chromium 152 and later, under every transport policy.
+- The selected candidate pair is read twice — when ICE connects and when the
+  data channel opens — and a local `srflx` is re-identified as `prflx` once
+  the peer's check reveals the same address. The summary kept the last read
+  and the trace kept the first, so one pair was named two ways. The trace now
+  says `pair now …` when the read changes.
+
+### Changed
+
+- The install and register commands know which shell they are pasted into.
+  Windows takes `npx.cmd` and a `cmd /d /c ` prefix, because npm installs
+  `claude` and `codex` as PowerShell script shims that keep a bare `--` for
+  themselves. Every command now names `@latest`, so npm requests the published
+  package instead of selecting an unbuilt local workspace copy. The README
+  gives both platforms, and the prerequisites, in order.
+
 ## [0.6.3] - 2026-09-04
 
 ### Fixed
@@ -232,7 +279,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   two separate identities that cannot read each other's keys.
 - Install snippets for Claude Code and Codex, printed by `zas-agent pair`.
 
-[Unreleased]: https://github.com/soke1556/zas-agent/compare/v0.6.3...HEAD
+[Unreleased]: https://github.com/soke1556/zas-agent/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/soke1556/zas-agent/compare/v0.6.3...v0.7.0
 [0.6.3]: https://github.com/soke1556/zas-agent/compare/v0.6.2...v0.6.3
 [0.6.2]: https://github.com/soke1556/zas-agent/compare/v0.6.1...v0.6.2
 [0.6.1]: https://github.com/soke1556/zas-agent/compare/v0.6.0...v0.6.1

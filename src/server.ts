@@ -8,6 +8,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { normalizePairingCode } from './shared/agent.js';
+import { MIN_EXPIRY_DAYS } from './shared/constants.js';
 import { formatDirectDiagLines } from './shared/direct-engine.js';
 import { ZasClient } from './client.js';
 import { sendDirect, sendDirectFallback, type DirectDeps, type FailedDirect } from './direct.js';
@@ -57,6 +58,20 @@ const AGENT_CUE = " The owner sees every item this agent sends with the >_ agent
 const PAIR_ANNOUNCE_MS = 15_000;
 
 const NOTE_LABEL_MAX = 40;
+
+/** The one thing a sender gets to say about an item's clock, on both sending
+ *  tools so they answer the question the same way.
+ *
+ *  It can only ever take time away. The server clamps whatever arrives to the
+ *  account's own plan, so asking for a hundred days is not refused, it is
+ *  simply five — which is why there is no maximum here. The floor is a whole
+ *  day because the ring counts whole days.
+ *
+ *  Omitting it is the answer for almost everything. It is worth setting for
+ *  output that is stale tomorrow — a build log, a test run, a screenshot of a
+ *  bug already fixed — so a channel is not left holding five days of noise. */
+const EXPIRES_IN_DAYS = z.number().int().min(MIN_EXPIRY_DAYS).optional()
+  .describe('How many whole days the item should live for, at least 1. Leave it out for the account\'s normal life (5 days). It can only shorten an item, never extend one: a longer request is clamped to what the plan grants. Worth setting for output that is stale tomorrow, such as a build log or a test run.');
 
 const delay = (ms: number): Promise<void> => new Promise((resolve) => { setTimeout(resolve, ms); });
 
@@ -309,6 +324,7 @@ ${formatDirectDiagLines(job.diag).join('\n')}`) };
       path: z.string().describe('Absolute or relative path of the file to send.'),
       channel: z.string().optional().describe('Channel name or id. Optional when the agent holds exactly one channel.'),
       title: z.string().optional().describe('Label for the item. Defaults to the file name.'),
+      expires_in_days: EXPIRES_IN_DAYS,
     },
   }, async (input) => {
     try {
@@ -445,6 +461,7 @@ ${formatDirectDiagLines(job.diag).join('\n')}`) };
       title: z.string().optional().describe('Label for the item. Defaults to the first line.'),
       lang: z.string().optional().describe('Language of the snippet, for highlighting (for example "ts", "py").'),
       secret: z.boolean().optional().describe('Hide the body behind a cover until the reader opens it.'),
+      expires_in_days: EXPIRES_IN_DAYS,
     },
   }, async (input) => {
     try {

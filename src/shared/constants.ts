@@ -25,6 +25,16 @@ export const EXPIRY_DAYS = 5;
  *  session is meant to be a hand-off, not a home. */
 export const ANON_EXPIRY_DAYS = 2;
 
+/** The shortest life a sender may ask an item for. A whole day, because the
+ *  ring counts whole days and anything under one is a countdown the interface
+ *  has no way to draw — and because an item that leaves before the person it
+ *  was sent to opens the app was never delivered.
+ *
+ *  It is a floor on the request, not on the item: an item still leaves the
+ *  moment its own clock runs out, and burn-after-read still ends one on the
+ *  first read. */
+export const MIN_EXPIRY_DAYS = 1;
+
 /** How long a session with nothing in it survives. Adding an item pushes the
  *  session out to that item's own expiry, so this only ever ends the sessions
  *  nobody used. */

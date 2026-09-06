@@ -59,6 +59,7 @@ interface LinkBody {
   caps: string[];
   proofs: { blob_id: string; challenge_id: string; mac: string }[];
   idempotency_key: string;
+  expires_in_days?: number;
 }
 
 interface Challenge { challenge_id: string; nonce: string; offsets: number[]; sample_len: number }
@@ -292,6 +293,30 @@ describe('send', () => {
     expect(server.links[0].idempotency_key).toBe(
       agentSendIdempotencyKey('ch1', await blake3Hex(bytes), 'Informe de agosto'),
     );
+  });
+
+  it('asks for a shorter life, and keys the send by it so the same file can be sent twice', async () => {
+    const server = fakeServer();
+    vi.stubGlobal('fetch', server.fetchImpl);
+    const path = write('build.log', 'linea '.repeat(64));
+    const ctx: SendContext = { identity, client: server.client, profile: 'p' };
+
+    const short = await sendFile(ctx, { path, expires_in_days: 1 });
+    expect(short.replayed).toBe(false);
+    expect(server.links[0].expires_in_days).toBe(1);
+
+    // The same bytes for the normal life is a different send, not a replay of
+    // the one-day one: both replay guards, the local receipt and the server's
+    // idempotency key, carry the lifetime.
+    const normal = await sendFile(ctx, { path });
+    expect(normal.replayed).toBe(false);
+    expect(server.links).toHaveLength(2);
+    expect(server.links[1].expires_in_days).toBeUndefined();
+    expect(server.links[1].idempotency_key).not.toBe(server.links[0].idempotency_key);
+
+    // And asking twice for the same short life is one item.
+    expect((await sendFile(ctx, { path, expires_in_days: 1 })).replayed).toBe(true);
+    expect(server.links).toHaveLength(2);
   });
 
   it('keeps the fingerprint cache key hashed, not the clear title', async () => {
@@ -902,6 +927,27 @@ describe('send', () => {
     expect(first.replayed).toBe(false);
     expect(second).toEqual({ ...first, replayed: true });
     expect(server.links).toHaveLength(1);
+  });
+
+  it('keys a note by its life too, and leaves a note that asks for nothing untouched', async () => {
+    const server = fakeServer();
+    const ctx: SendContext = { identity, client: server.client, profile: 'p' };
+
+    const plain = await sendNote(ctx, { text: 'salida del test' });
+    const oneDay = await sendNote(ctx, { text: 'salida del test', expires_in_days: 1 });
+    expect(plain.replayed).toBe(false);
+    expect(oneDay.replayed).toBe(false);
+    expect(server.links).toHaveLength(2);
+    expect(server.links[0].expires_in_days).toBeUndefined();
+    expect(server.links[1].expires_in_days).toBe(1);
+    // A send that asks for nothing hashes to exactly what it always did, so
+    // receipts written before the field existed still match.
+    expect(server.links[0].idempotency_key).toBe(agentSendIdempotencyKey(
+      'ch1',
+      await blake3Hex(new TextEncoder().encode(' 0 salida del test')),
+      'salida del test',
+    ));
+    expect(server.links[1].idempotency_key).not.toBe(server.links[0].idempotency_key);
   });
 
   it('names the common types and shrugs at the rest', () => {
