@@ -117,6 +117,9 @@ export function agentSendIdempotencyKey(channelId: string, contentHashHex: strin
 
 export const AGENT_ERRORS = [
   'agent_forbidden', 'agent_revoked', 'grant_missing', 'send_forbidden', 'read_forbidden',
+  // A grant on a channel its owner has not approved yet. Waiting is not
+  // absence, and the two ask the person for different things.
+  'grant_pending',
   'direct_mode', 'not_direct_mode',
   'key_stale', 'quota_exceeded', 'rate_limited', 'file_too_big', 'duplicate', 'pairing_expired',
   'pairing_cancelled', 'feature_disabled',
@@ -139,7 +142,10 @@ export interface ResolvedAgentLimits extends AgentLimits {
  *  arrive as 409 with the number that was full in `limit`. */
 export const AGENT_OWNER_ERRORS = [
   'pairing_missing', 'pairing_cancelled', 'pairing_expired', 'code_mismatch',
-  'agent_limit', 'grant_limit', 'unknown_channel', 'unknown_agent',
+  'agent_limit', 'grant_limit', 'foreign_limit', 'unknown_channel', 'unknown_agent',
+  // A channel whose owner refused this agent. Only that owner clears it, so
+  // refusing is not a button the asking side can grind.
+  'grant_refused',
   // A protocol-2 pairing approved once: the claim code is not minted twice.
   'pairing_approved',
 ] as const;

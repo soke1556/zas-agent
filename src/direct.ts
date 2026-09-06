@@ -23,7 +23,7 @@ import { directMetaOf, type DirectMeta } from './shared/direct-protocol.js';
 import { directFileFrom } from './file-source.js';
 import { createFallbackMeta, uploadFallback, type PutPart } from './shared/direct-fallback.js';
 import { ZasError } from './errors.js';
-import { channelKeyOf, channelNameOf, grantsFor, resolveChannel } from './grants.js';
+import { channelAccountOf, channelKeyOf, channelNameOf, grantsFor, resolveChannel } from './grants.js';
 import type { RemoteGrant } from './identity.js';
 import { mimeFor, type SendContext, type SendPhase } from './send.js';
 
@@ -211,7 +211,9 @@ export async function sendDirect(
     ...stamp,
   });
   const route = `/direct/${cid}/${id}`;
-  const offerPath = `accounts/${owner}/channels/${cid}/direct/${id}`;
+  // Where the channel is kept, which is not this agent's owner when somebody
+  // else created it. `owner` above still stamps who is acting.
+  const offerPath = `accounts/${channelAccountOf(ctx.identity, grant)}/channels/${cid}/direct/${id}`;
   // Best effort: the offer's lease ends it anyway, and a state the server
   // refused is one it already knows.
   const setState = (state: 'done' | 'failed' | 'cancelled'): Promise<void> =>

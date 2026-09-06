@@ -55,7 +55,29 @@ export function channelNameOf(identity: Identity, grant: RemoteGrant): string {
   }
 }
 
+/** Which account to address for a channel: where it lives, not who this
+ *  agent belongs to. The two are the same for a channel its owner created,
+ *  and only that case existed before shared channels could be granted.
+ *
+ *  This is for Firestore paths alone. The API takes no account from an agent
+ *  - it looks up where the channel lives itself, and refuses an agent that
+ *  claims any owner but its own. */
+export function channelAccountOf(identity: Identity, grant: RemoteGrant): string {
+  return grant.channel_owner_uid !== undefined && grant.channel_owner_uid !== ''
+    ? grant.channel_owner_uid
+    : identity.owner_uid;
+}
+
 const fold = (value: string): string => value.trim().toLowerCase();
+
+/** A grant its channel's owner has not answered yet. It opens nothing, and
+ *  saying so is the whole difference between "ask the person whose channel it
+ *  is" and what `grant_missing` would have said, which is "ask your own
+ *  owner". */
+function usable(grant: RemoteGrant): RemoteGrant {
+  if (grant.pending) throw new ZasError('grant_pending', 0);
+  return grant;
+}
 
 /** Which channel the caller meant. An id wins outright; a name has to be the
  *  only one that matches, because sending someone's work into the wrong
@@ -68,12 +90,12 @@ export function resolveChannel(
   channel: string | undefined,
 ): RemoteGrant {
   if (channel === undefined || fold(channel) === '') {
-    if (grants.length === 1) return grants[0];
+    if (grants.length === 1) return usable(grants[0]);
     throw new ZasError('grant_missing', 0);
   }
   const wanted = channel.trim();
   const byId = grants.find((g) => g.channel_id === wanted);
-  if (byId) return byId;
+  if (byId) return usable(byId);
   const folded = fold(wanted);
   const byName = grants.filter((g) => {
     try {
@@ -84,6 +106,6 @@ export function resolveChannel(
       return false;
     }
   });
-  if (byName.length === 1) return byName[0];
+  if (byName.length === 1) return usable(byName[0]);
   throw new ZasError('grant_missing', 0);
 }

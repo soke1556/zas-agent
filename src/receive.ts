@@ -25,7 +25,7 @@ import { downloadFallback, fallbackMetaOf, type DirectFallbackMeta } from './sha
 import type { DirectMeta } from './shared/direct-protocol.js';
 import { channelLabel, defaultSleep, installWebRtc, newDeviceToken, sealer } from './direct.js';
 import { ZasError } from './errors.js';
-import { channelKeyOf, grantsFor, resolveChannel } from './grants.js';
+import { channelAccountOf, channelKeyOf, grantsFor, resolveChannel } from './grants.js';
 import type { RemoteGrant } from './identity.js';
 import { destinationOf } from './read.js';
 import type { SendContext } from './send.js';
@@ -64,7 +64,11 @@ export interface FailedReceive {
   channel_id: string;
   channel_name: string;
   offer_id: string;
+  /** Who acted: this agent's own owner, which is what the API is given.
+   *  `channel_account` is where the offer is kept, and on a shared channel
+   *  the two are different accounts. */
   owner_uid: string;
+  channel_account: string;
   device: string;
   dest?: string;
   meta: DirectMeta;
@@ -232,11 +236,15 @@ export async function receiveDirect(
   const channelName = channelLabel(ctx, grant);
   const cid = grant.channel_id;
   const owner = ctx.identity.owner_uid;
+  // Two different accounts, and they part company on a shared channel: the
+  // stamp says who is acting, which the API refuses to take as anybody but
+  // this agent's own owner, and the path says where the channel is kept.
+  const account = channelAccountOf(ctx.identity, grant);
   const device = deps.device ?? newDeviceToken();
   const { seal, open } = sealer(key, grant.key_version);
   const stamp = { device, owner_uid: owner };
   const startedAt = now();
-  const channelPath = `accounts/${owner}/channels/${cid}`;
+  const channelPath = `accounts/${account}/channels/${cid}`;
 
   // ---- the wait for an offer ----
   report('waiting');
@@ -396,6 +404,7 @@ export async function receiveDirect(
     channel_name: channelName,
     offer_id: offerId,
     owner_uid: owner,
+    channel_account: account,
     device,
     ...(input.dest !== undefined ? { dest: input.dest } : {}),
     meta: offered,
@@ -420,7 +429,7 @@ export async function receiveDirectFallback(
   const { open } = sealer(record.key, record.key_version);
   const stamp = { device: record.device, owner_uid: record.owner_uid };
   const base = `/direct/${record.channel_id}/${record.offer_id}/fallback`;
-  const offerPath = `accounts/${record.owner_uid}/channels/${record.channel_id}/direct/${record.offer_id}`;
+  const offerPath = `accounts/${record.channel_account}/channels/${record.channel_id}/direct/${record.offer_id}`;
 
   const doc = await ctx.client.firestoreGet(offerPath);
   const enc = stringField(doc, 'fallback_meta_enc');

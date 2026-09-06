@@ -55,6 +55,20 @@ describe('grants', () => {
     expect(resolveChannel(identity, [one], undefined)).toBe(one);
   });
 
+  it('names a channel waiting on its owner as waiting, however it was picked', () => {
+    // The key is real - the member sealed it - and it opens nothing until the
+    // channel's owner allows the agent. "Missing" would send the person to
+    // their own agent screen, where there is nothing to fix.
+    const waiting = grantFor('c1', 'Trabajo', { pending: true });
+    const other = grantFor('c2', 'Fotos');
+    for (const pick of ['c1', 'trabajo', undefined]) {
+      expect(() => resolveChannel(identity, pick === undefined ? [waiting] : [waiting, other], pick))
+        .toThrow(expect.objectContaining({ code: 'grant_pending' }));
+    }
+    // And it takes nothing away from the channels that are allowed.
+    expect(resolveChannel(identity, [waiting, other], 'c2')).toBe(other);
+  });
+
   it('refuses when the name is ambiguous, unknown, or there is nothing to pick', () => {
     const one = grantFor('c1', 'Trabajo');
     const twin = grantFor('c2', 'trabajo');

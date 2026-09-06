@@ -18,7 +18,7 @@ import {
 import { decryptChunk } from './shared/mle.js';
 import { apiPublic } from './client.js';
 import { ZasError } from './errors.js';
-import { channelKeyOf, grantsFor, resolveChannel } from './grants.js';
+import { channelAccountOf, channelKeyOf, grantsFor, resolveChannel } from './grants.js';
 import type { Identity, RemoteGrant } from './identity.js';
 import type { SendContext } from './send.js';
 
@@ -182,7 +182,7 @@ function nameFrom(channelKey: Uint8Array, grant: RemoteGrant): string {
 }
 
 function linksParent(identity: Identity, grant: RemoteGrant): string {
-  return `accounts/${identity.owner_uid}/channels/${grant.channel_id}`;
+  return `accounts/${channelAccountOf(identity, grant)}/channels/${grant.channel_id}`;
 }
 
 /** The document reference `__name__` is compared against: a full resource

@@ -245,6 +245,36 @@ describe('read', () => {
     });
   });
 
+  it('reads a channel of somebody else where that channel lives', async () => {
+    // The links of a shared channel sit under the account that created it, not
+    // under the account whose agent this is. Reading its own account's copy
+    // asked for a path that holds nothing, and Firestore answered
+    // PERMISSION_DENIED, which reads out as "this agent cannot read that
+    // channel" on a grant that says it can.
+    const host = 'host-account-1';
+    const server = fakeServer({
+      grants: [grant({ channel_owner_uid: host })],
+      docs: [{
+        name: `${DOC_ROOT}/accounts/${host}/channels/ch1/links/L1`,
+        fields: { manifest_enc: { stringValue: sealedOf(note('hola')) } },
+        createTime: '2026-09-01T10:00:00.000000Z',
+        updateTime: '2026-09-01T10:00:00.000000Z',
+      }],
+    });
+
+    const out = await listItems(ctxOf(server.client), 'ch1');
+    expect(server.queries[0].parent).toBe(`accounts/${host}/channels/ch1`);
+    expect(out.items.map((i) => i.id)).toEqual(['L1']);
+  });
+
+  it('reads its owner’s own channel from its owner’s account', async () => {
+    // A server that says nothing about where the channel lives is one that
+    // only ever granted this account's own channels, which is where they are.
+    const server = fakeServer({ docs: [linkDoc('L1', { manifest_enc: { stringValue: sealedOf(note('hola')) } })] });
+    await listItems(ctxOf(server.client), 'ch1');
+    expect(server.queries[0].parent).toBe(`accounts/${identity.owner_uid}/channels/ch1`);
+  });
+
   it('refuses a channel without a read grant before it touches the network', async () => {
     const server = fakeServer({ grants: [grant({ read: false })] });
 

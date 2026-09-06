@@ -131,16 +131,23 @@ export function channelLimitFor(plan: string | undefined): number | null {
 export interface AgentLimits {
   agents: number;
   channels_per_agent: number | null;
+  /** Of an agent's channels, how many may be ones its owner did not create: a
+   *  personal channel they joined and the channel's owner approved. Counted
+   *  apart from `channels_per_agent` so reach inside somebody else's channel
+   *  can never be widened by widening the ordinary reach. A channel an
+   *  organization manages is not foreign — that one is governed by the
+   *  organization's own switch and counts where it always did. */
+  foreign_channels_per_agent: number;
 }
 
 /** `pro` and `max` carry the same numbers as `free` today. They are named
  *  anyway: `agentLimitsFor` falls back to `free` for a plan it does not know,
  *  so a later cut to the free row would quietly cut every paying account. */
 export const AGENT_LIMITS: Record<string, AgentLimits> = {
-  anon: { agents: 0, channels_per_agent: 0 },
-  free: { agents: 5, channels_per_agent: 5 },
-  pro: { agents: 5, channels_per_agent: 5 },
-  max: { agents: 5, channels_per_agent: 5 },
+  anon: { agents: 0, channels_per_agent: 0, foreign_channels_per_agent: 0 },
+  free: { agents: 5, channels_per_agent: 5, foreign_channels_per_agent: 2 },
+  pro: { agents: 5, channels_per_agent: 5, foreign_channels_per_agent: 5 },
+  max: { agents: 5, channels_per_agent: 5, foreign_channels_per_agent: 5 },
 };
 
 export function agentLimitsFor(plan: string | undefined): AgentLimits {

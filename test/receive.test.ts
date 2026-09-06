@@ -293,6 +293,7 @@ describe('receiveDirect', () => {
     expect(failures).toHaveLength(1);
     expect(failures[0]).toMatchObject({
       channel_id: 'ch1', channel_name: 'Trabajo', offer_id: 'o1', owner_uid: 'owner-1',
+      channel_account: 'owner-1',
       device: 'device-token-0001', dest, meta: offered, key_version: 1, reason: 'ice_failed',
     });
   });
@@ -340,6 +341,7 @@ describe('receiveDirectFallback', () => {
     channel_name: 'Trabajo',
     offer_id: 'o1',
     owner_uid: 'owner-1',
+    channel_account: 'owner-1',
     device: 'device-token-0001',
     dest,
     meta: offered,

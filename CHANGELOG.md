@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-09-06
+
+### Added
+
+- A channel you joined, but did not create, can now be granted to an agent.
+  Its owner has to allow the agent first. Until they answer, the grant is
+  written and waiting: the key is real and it opens nothing.
+- `grant_pending`. A tool call on a channel whose owner has not answered says
+  so, and says to ask them, rather than reporting the grant as missing.
+- `foreign_limit` on pairing. A plan allows an agent a number of channels of
+  other people, and the free plan allows fewer of those than of your own.
+- `zas_status` marks such a channel as waiting for its owner.
+
+### Fixed
+
+- Reading a channel somebody else created said `read_forbidden` on a grant
+  that plainly said `send · read`, while sending into the same channel
+  worked. Sending goes through the API, which knows which account holds a
+  channel; reading goes to Firestore directly, and the agent looked under
+  its own owner, where a shared channel is not kept. The server now says
+  where each channel lives, and reads, Directo offers and Directo fallbacks
+  all address that account. A channel of your own is unchanged: it is in
+  your own account, which is where it was always read from.
+
 ## [0.7.0] - 2026-09-05
 
 ### Added
@@ -279,7 +303,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   two separate identities that cannot read each other's keys.
 - Install snippets for Claude Code and Codex, printed by `zas-agent pair`.
 
-[Unreleased]: https://github.com/soke1556/zas-agent/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/soke1556/zas-agent/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/soke1556/zas-agent/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/soke1556/zas-agent/compare/v0.6.3...v0.7.0
 [0.6.3]: https://github.com/soke1556/zas-agent/compare/v0.6.2...v0.6.3
 [0.6.2]: https://github.com/soke1556/zas-agent/compare/v0.6.1...v0.6.2

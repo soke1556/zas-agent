@@ -91,6 +91,9 @@ interface Pairing {
  *  stored send to one with `direct_mode`, and `direct.ts` refuses every
  *  Directo send to one without, so the line names which. */
 function rightsOf(grant: RemoteGrant): string {
+  // A channel of somebody else that its owner has not answered yet. Naming
+  // the rights it would have had would be a promise the first send breaks.
+  if (grant.pending) return 'waiting for the channel’s owner';
   const rights: string[] = [];
   if (grant.send && grant.mode !== 'view') rights.push(grant.direct_mode ? 'send (Directo)' : 'send');
   // Reading a Directo channel is receiving: it stores nothing, so there is no

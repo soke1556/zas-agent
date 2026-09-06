@@ -66,6 +66,15 @@ export interface RemoteGrant {
   name_enc: string;
   mode: 'edit' | 'view';
   direct_mode: boolean;
+  /** Present, and true, on a grant for a channel of somebody else that its
+   *  owner has not answered yet. The key is real and the row is not access:
+   *  every server path tests the grant is active first. */
+  pending?: boolean;
+  /** The account this channel lives under, which is not this agent's owner
+   *  when somebody else created the channel or an organization manages it.
+   *  Absent from an older server, and then the owner's own account is the
+   *  only account it ever granted. Read it through `channelAccountOf`. */
+  channel_owner_uid?: string;
 }
 
 export interface GrantCache {
