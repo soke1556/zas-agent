@@ -1,4 +1,4 @@
-// The MCP surface: eleven tools, and nothing behind them that the CLI could not
+// The MCP surface: thirteen tools, and nothing behind them that the CLI could not
 // also call. Everything a coding agent is allowed to do with a Zas account
 // passes through here, so two rules hold for every tool in the file. It answers
 // in the closed error vocabulary — `code: <es> / <en>` — and never with a stack
@@ -12,6 +12,7 @@ import { MIN_EXPIRY_DAYS } from './shared/constants.js';
 import { formatDirectDiagLines } from './shared/direct-engine.js';
 import { ZasClient } from './client.js';
 import { sendDirect, sendDirectFallback, type DirectDeps, type FailedDirect } from './direct.js';
+import { editItem, replaceFile } from './edit.js';
 import { humanSentence, ZasError } from './errors.js';
 import { receiveDirect, receiveDirectFallback, type FailedReceive, type ReceiveDeps } from './receive.js';
 import { channelNameOf, grantsFor } from './grants.js';
@@ -128,7 +129,7 @@ export function buildServer(profile: string, deps: ServerDeps = {}): McpServer {
     } catch { /* nothing about analytics may reach the caller */ }
   };
 
-  // Measured here rather than in eleven places, so a tool added later is
+  // Measured here rather than in thirteen places, so a tool added later is
   // measured without anyone remembering to. The report is started after the
   // answer is built and never waited for: a tool call's result must not
   // depend on whether analytics worked.
@@ -506,6 +507,47 @@ ${formatDirectDiagLines(job.diag).join('\n')}`) };
   }, async (input) => {
     try {
       return text(await getItem(ctx(), input.channel, input.id, input.dest));
+    } catch (e) {
+      return failed(e);
+    }
+  });
+
+  // ---- changing what it sent ----
+
+  server.registerTool('zas_edit_item', {
+    description: "Change an item this agent sent, keeping its id: the title of a file or a note, or a note's text, language and secret cover. Refuses items sent by anyone else. A file's bytes change with zas_replace_file. Needs a grant that includes reading and sending. Pass only the fields to change; an empty title clears it." + AGENT_CUE,
+    inputSchema: {
+      id: z.string().describe('Item id, as `zas_list_items` reports it.'),
+      channel: z.string().optional().describe('Channel name or id. Optional when the agent holds exactly one channel.'),
+      title: z.string().optional().describe('New label. An empty string clears it, so the file name or the first line shows again.'),
+      text: z.string().optional().describe('New body, for a note.'),
+      lang: z.string().optional().describe('Language of the snippet, for highlighting (for example "ts", "py"). An empty string makes it plain text.'),
+      secret: z.boolean().optional().describe('Hide the body behind a cover until the reader opens it. False removes the cover.'),
+    },
+  }, async (input) => {
+    try {
+      return text(await editItem(ctx(), input));
+    } catch (e) {
+      return failed(e);
+    }
+  });
+
+  server.registerTool('zas_replace_file', {
+    description: "Replace the bytes of a file this agent sent with a file from this machine, keeping the item id, its place in the channel and its pin. Refuses items sent by anyone else, notes, and an item with a public share. Returns the item id, or a job id when the upload takes longer than a minute. Sends any file this process can read; confirm with the owner before sending secrets, keys or credentials." + AGENT_CUE,
+    inputSchema: {
+      id: z.string().describe('Item id, as `zas_list_items` reports it.'),
+      path: z.string().describe('Absolute or relative path of the new file.'),
+      channel: z.string().optional().describe('Channel name or id. Optional when the agent holds exactly one channel.'),
+      title: z.string().optional().describe('New label. Defaults to the label the item has.'),
+    },
+  }, async (input) => {
+    try {
+      const c = ctx();
+      const job = runner.start(
+        'replace', input.title ?? input.path, input.channel ?? '',
+        (report) => replaceFile(c, input, report),
+      );
+      return settled(await runner.wait(job));
     } catch (e) {
       return failed(e);
     }

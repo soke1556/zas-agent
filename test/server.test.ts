@@ -19,7 +19,7 @@ import { b64ToBytes, bytesToB64 } from '../src/shared/hash.js';
 import { encryptChannelName } from '../src/shared/manifest.js';
 import { assignChannelKey, mintChannelKey } from '../src/shared/sharedchannel.js';
 import type { ZasClient } from '../src/client.js';
-import { humanSentence, ZasError } from '../src/errors.js';
+import { errorFromResponse, humanSentence, ZasError } from '../src/errors.js';
 import { defaultEndpoints, newKeyMaterial, type Identity, type RemoteGrant } from '../src/identity.js';
 import { JobRunner } from '../src/jobs.js';
 import { openInBrowser } from '../src/open.js';
@@ -280,10 +280,27 @@ describe('buildServer', () => {
     await client.close();
   });
 
+  it('turns the server’s not_allowed on an edit into not_yours, with its sentence', async () => {
+    const client = await connect(buildServer('p', {
+      identity,
+      client: fakeClient(async () => { throw errorFromResponse(403, { error: 'not_allowed' }); }),
+    }));
+    const refused = await call(client, 'zas_edit_item', { id: 'L1', channel: 'Trabajo', title: 'x' });
+    expect(refused.isError).toBe(true);
+    expect(refused.text).toContain('not_yours');
+    expect(refused.text).toContain('was not sent by this agent');
+    expect(refused.text).not.toContain('not_allowed');
+    // A path this machine does not have is refused before the item is read.
+    const replaced = await call(client, 'zas_replace_file', { id: 'L1', channel: 'Trabajo', path: 'no-such-file.bin' });
+    expect(replaced.isError).toBe(true);
+    expect(replaced.text).toContain('upload_failed');
+    await client.close();
+  });
+
   it('refuses every tool that needs an identity when the profile has none', async () => {
     const client = await connect(buildServer('nobody'));
     for (const name of [
-      'zas_send_file', 'zas_send_note', 'zas_list_items', 'zas_get_item',
+      'zas_send_file', 'zas_send_note', 'zas_list_items', 'zas_get_item', 'zas_edit_item', 'zas_replace_file',
       'zas_send_direct', 'zas_send_direct_fallback', 'zas_receive_direct', 'zas_receive_direct_fallback',
     ]) {
       const refused = await call(client, name, {

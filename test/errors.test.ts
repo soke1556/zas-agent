@@ -27,6 +27,12 @@ describe('errors', () => {
     expect(errorFromResponse(413, { error: 'file_too_large' }).code).toBe('file_too_big');
     expect(errorFromResponse(507, { error: 'storage_limit' }).code).toBe('quota_exceeded');
     expect(errorFromResponse(404, { error: 'unknown_channel' }).code).toBe('grant_missing');
+    // The item-change routes: the server's `not_allowed` is, for an agent,
+    // always "not your item"; a share of any kind is one word to the agent.
+    expect(errorFromResponse(403, { error: 'not_allowed' }).code).toBe('not_yours');
+    expect(errorFromResponse(409, { error: 'shared' }).code).toBe('item_shared');
+    expect(errorFromResponse(409, { error: 'bar_armed' }).code).toBe('item_shared');
+    expect(errorFromResponse(409, { error: 'stale' }).code).toBe('stale');
     expect(errorFromResponse(429, { error: 'rate_limited' }).code).toBe('rate_limited');
     expect(errorFromResponse(500, 'not json at all').code).toBe('network');
   });
@@ -61,7 +67,7 @@ describe('errors', () => {
     expect(SIGN_IN_CODES.size).toBeGreaterThanOrEqual(6);
     // The closed set is exactly what has a sentence, so a code without one
     // reaches a terminal as a bare server-shaped word.
-    for (const code of [...scanned, ...SIGN_IN_CODES, 'pairing_expired', 'pairing_cancelled']) {
+    for (const code of [...scanned, ...SIGN_IN_CODES, 'pairing_expired', 'pairing_cancelled', 'not_yours', 'stale', 'not_a_note', 'not_a_file', 'item_shared']) {
       expect(humanSentence(new ZasError(code, 0)), code).not.toBe(`Zas answered ${code} (0).`);
     }
   });

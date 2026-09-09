@@ -81,7 +81,7 @@ interface FirestoreValue {
   nullValue?: unknown;
 }
 
-interface LinkRow {
+export interface LinkRow {
   id: string;
   manifestEnc?: string;
   /** The agent uid that sent it, when one did. */
@@ -90,6 +90,10 @@ interface LinkRow {
   /** null is not "unknown": it is a pin, which never departs. */
   expiresAt: number | null;
   bar: boolean;
+  /** The document's own update time in milliseconds: what an edit hands back
+   *  as its version guard. `Date.parse` keeps milliseconds of the microseconds
+   *  Firestore writes, and the server compares at the millisecond too. */
+  updateTime: number | null;
 }
 
 function stringOf(value: FirestoreValue | undefined): string | undefined {
@@ -102,7 +106,7 @@ function timeOf(value: FirestoreValue | undefined): number | null {
 }
 
 function rowOf(doc: unknown): LinkRow {
-  const document = (doc ?? {}) as { name?: unknown; fields?: unknown };
+  const document = (doc ?? {}) as { name?: unknown; fields?: unknown; updateTime?: unknown };
   const name = typeof document.name === 'string' ? document.name : '';
   const fields = (document.fields && typeof document.fields === 'object'
     ? document.fields
@@ -114,6 +118,7 @@ function rowOf(doc: unknown): LinkRow {
     createdAt: timeOf(fields.created_at),
     expiresAt: timeOf(fields.expires_at),
     bar: fields.bar?.booleanValue === true,
+    updateTime: timeOf({ timestampValue: document.updateTime }),
   };
 }
 
@@ -341,12 +346,25 @@ export function destinationOf(
   return { target: freeName(at) };
 }
 
-export async function getItem(
+/** One item, opened: the grant it was read under, the channel key, the row
+ *  and the manifest. What an edit needs before it writes. */
+export interface LoadedItem {
+  grant: RemoteGrant;
+  channelKey: Uint8Array;
+  row: LinkRow;
+  manifest: Manifest;
+}
+
+/** The read every single-item operation starts with, and its refusals: a
+ *  grant that does not read, an id that is not one, a row that is gone,
+ *  consumed, or sealed for a key this agent does not hold. From here those
+ *  are one answer, and naming which would tell the caller something about a
+ *  channel it cannot read. */
+export async function loadItem(
   ctx: SendContext,
   channel: string | undefined,
   id: string,
-  dest?: string,
-): Promise<{ path?: string; text?: string; bytes: number }> {
+): Promise<LoadedItem> {
   const grant = await readGrant(ctx, channel);
   if (!ID_SEGMENT.test(id)) throw new ZasError('not_found', 404);
   const channelKey = channelKeyOf(ctx.identity, grant);
@@ -365,10 +383,17 @@ export async function getItem(
   const row = docs.length > 0 ? rowOf(docs[0]) : null;
   if (!row || !readable(row)) throw new ZasError('not_found', 404);
   const manifest = openFor(channelKey, row);
-  // Gone, consumed, or sealed for a key this agent does not hold: from here
-  // they are one answer, and naming which would tell the caller something
-  // about a channel it cannot read.
   if (!manifest) throw new ZasError('not_found', 404);
+  return { grant, channelKey, row, manifest };
+}
+
+export async function getItem(
+  ctx: SendContext,
+  channel: string | undefined,
+  id: string,
+  dest?: string,
+): Promise<{ path?: string; text?: string; bytes: number }> {
+  const { row, manifest } = await loadItem(ctx, channel, id);
 
   if (manifest.kind === 'text') {
     const text = manifest.text ?? '';

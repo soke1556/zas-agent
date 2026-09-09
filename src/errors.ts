@@ -12,6 +12,12 @@ const RENAMES: Record<string, string> = {
   // is the plan's Directo ceiling.
   not_live: 'direct_cancelled',
   direct_too_big: 'file_too_big',
+  // The item-change routes. `not_allowed` there means the item is not this
+  // agent's; a share of any kind, armed or not, is the one reason a replace
+  // is refused that the owner fixes from the item itself.
+  not_allowed: 'not_yours',
+  shared: 'item_shared',
+  bar_armed: 'item_shared',
 };
 
 export class ZasError extends Error {
@@ -93,6 +99,11 @@ const SENTENCES: Record<string, string> = {
   rate_limited: 'Too many sends in a row. Wait a moment.',
   file_too_big: 'The file is over the plan limit.',
   duplicate: 'That item is already in the channel.',
+  not_yours: 'That item was not sent by this agent. It can only change its own items.',
+  stale: 'That item changed while this agent was working on it. Read it again and retry.',
+  not_a_note: 'That item is a file, not a note. Only its title can change; use zas_replace_file for the bytes.',
+  not_a_file: 'That item is a note, not a file. Use zas_edit_item.',
+  item_shared: 'That item has a public share. The owner removes the share first.',
   pairing_expired: 'The pairing expired. Run “zas-agent pair” again.',
   pairing_cancelled: 'The owner cancelled the pairing.',
   claim_mismatch: 'The code does not match. Try again.',

@@ -121,7 +121,7 @@ export function mimeFor(path: string): string {
 
 interface ProbeChallenge { challenge_id: string; nonce: string; offsets: number[]; sample_len: number }
 interface ProbeAnswer { results?: Record<string, string>; challenges?: Record<string, ProbeChallenge> }
-interface Placed { entry: ManifestChunk; proven?: boolean }
+export interface Placed { entry: ManifestChunk; proven?: boolean }
 /** Where one blob id ended up: the cap that names it, and whether the server
  *  already held the bytes. One per distinct id, not one per manifest entry. */
 interface Placement { cap: string; proven: boolean }
@@ -448,50 +448,42 @@ async function postLink(
   return created.link_id;
 }
 
-export async function sendFile(
-  ctx: SendContext,
-  input: SendFileInput,
-  onPhase?: (phase: SendPhase) => void,
-): Promise<SendResult> {
-  // stat before read: refusing a file this side of the wire is only useful if
-  // it happens before the bytes are in memory.
-  // Any stat failure is the same answer: the caller named a path this agent
-  // cannot use. ENOENT, ENOTDIR under a regular file, EACCES on a directory it
-  // may not traverse — the errno is the caller's business, and letting it out
-  // would print a raw Node error where a sentence belongs.
-  const stat = await fsp.stat(input.path).catch(() => {
+/** The path this side of the wire, before a byte is read or a request made:
+ *  a mistyped path must not spend an hour hashing a disk image. A directory,
+ *  a FIFO or a character device all report size 0, so the size guard alone
+ *  would never fire and a read would run to EOF — `/dev/zero` until the
+ *  process dies. The path comes from a coding agent that is only semi-trusted,
+ *  so it is checked rather than assumed. Any stat failure is the same answer:
+ *  the caller named a path this agent cannot use. ENOENT, ENOTDIR under a
+ *  regular file, EACCES on a directory it may not traverse — the errno is the
+ *  caller's business, and letting it out would print a raw Node error where a
+ *  sentence belongs. */
+export async function checkFilePath(path: string): Promise<void> {
+  const stat = await fsp.stat(path).catch(() => {
     throw new ZasError('upload_failed', 400);
   });
-  // A directory, a FIFO or a character device all report size 0, so the guard
-  // below would never fire and `readFile` would run to EOF — `/dev/zero` until
-  // the process dies. The path comes from a coding agent that is only
-  // semi-trusted, so it is checked rather than assumed.
   if (!stat.isFile()) throw new ZasError('upload_failed', 400);
   if (stat.size > MAX_FILE_BYTES) throw new ZasError('file_too_big', 413);
+}
 
-  const grant = await grantFor(ctx, input.channel);
-  const name = basename(input.path);
-  const title = input.title ?? name;
-  // A view, not a copy: `new Uint8Array(buffer)` would hold the file twice.
-  const file = await fsp.readFile(input.path);
-  // The stat above is the cheap early exit; the file may have grown since.
+/** The bytes and the file's own name. A view, not a copy: `new
+ *  Uint8Array(buffer)` would hold the file twice. The stat is the cheap early
+ *  exit; the file may have grown since, so the size is checked again. */
+export async function readFileChecked(path: string): Promise<{ bytes: Uint8Array; name: string }> {
+  await checkFilePath(path);
+  const file = await fsp.readFile(path);
   if (file.byteLength > MAX_FILE_BYTES) throw new ZasError('file_too_big', 413);
-  const bytes = new Uint8Array(file.buffer, file.byteOffset, file.byteLength);
-  const contentHash = await sendIdentity(await blake3Hex(bytes), input.expires_in_days);
-  const key = await receiptKey(ctx, grant.channel_id, contentHash, title);
-  const stored = receiptFor(ctx, key);
-  if (stored) {
-    return {
-      link_id: stored.link_id,
-      channel_id: grant.channel_id,
-      channel_name: channelNameOf(ctx.identity, grant),
-      bytes: stored.bytes,
-      chunks: stored.chunks,
-      deduplicated: stored.deduplicated,
-      replayed: true,
-    };
-  }
+  return { bytes: new Uint8Array(file.buffer, file.byteOffset, file.byteLength), name: basename(path) };
+}
 
+/** The placement half of a send: chunk, hash, OPRF, encrypt, then probe and
+ *  upload or prove. One placed entry per chunk, with the cap the server
+ *  issued; the link — or the replace — is the caller's to make. */
+export async function placeFile(
+  ctx: SendContext,
+  bytes: Uint8Array,
+  onPhase?: (phase: SendPhase) => void,
+): Promise<Placed[]> {
   onPhase?.('hashing');
   const plains: Uint8Array[] = [];
   for await (const piece of chunkStream([bytes])) plains.push(piece);
@@ -515,7 +507,48 @@ export async function sendFile(
   ));
 
   onPhase?.('uploading');
-  const placed = await placeChunks(ctx, encs);
+  return placeChunks(ctx, encs);
+}
+
+/** Drops every receipt naming a link, after that link changed: "send that
+ *  again" has to make a new item, not answer with the id of one that no
+ *  longer holds what the receipt says it does. */
+export function forgetLink(profile: string, linkId: string): void {
+  const entries: Record<string, SendReceipt> = {};
+  let dropped = false;
+  for (const [k, v] of Object.entries(loadFingerprints(profile).entries)) {
+    if (v && v.link_id === linkId) dropped = true;
+    else entries[k] = v;
+  }
+  if (dropped) saveFingerprints(profile, { entries });
+}
+
+export async function sendFile(
+  ctx: SendContext,
+  input: SendFileInput,
+  onPhase?: (phase: SendPhase) => void,
+): Promise<SendResult> {
+  // The path before the grant: a refusal here costs no request.
+  await checkFilePath(input.path);
+  const grant = await grantFor(ctx, input.channel);
+  const { bytes, name } = await readFileChecked(input.path);
+  const title = input.title ?? name;
+  const contentHash = await sendIdentity(await blake3Hex(bytes), input.expires_in_days);
+  const key = await receiptKey(ctx, grant.channel_id, contentHash, title);
+  const stored = receiptFor(ctx, key);
+  if (stored) {
+    return {
+      link_id: stored.link_id,
+      channel_id: grant.channel_id,
+      channel_name: channelNameOf(ctx.identity, grant),
+      bytes: stored.bytes,
+      chunks: stored.chunks,
+      deduplicated: stored.deduplicated,
+      replayed: true,
+    };
+  }
+
+  const placed = await placeFile(ctx, bytes, onPhase);
 
   onPhase?.('finishing');
   const mime = mimeFor(input.path);
@@ -554,7 +587,7 @@ export async function sendFile(
 
 /** The first line, clipped. A note has no file name, and the whole text as a
  *  label would fill the row it is supposed to introduce. */
-function noteName(text: string): string {
+export function noteName(text: string): string {
   return text.split('\n', 1)[0].trim().slice(0, NOTE_NAME_MAX) || 'nota';
 }
 

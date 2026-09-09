@@ -9,7 +9,7 @@ import { assignChannelKey, mintChannelKey } from '../src/shared/sharedchannel.js
 import type { ZasClient } from '../src/client.js';
 import { ZasError } from '../src/errors.js';
 import { defaultEndpoints, newKeyMaterial, type Identity, type RemoteGrant } from '../src/identity.js';
-import { getItem, listItems } from '../src/read.js';
+import { getItem, listItems, loadItem } from '../src/read.js';
 import type { SendContext } from '../src/send.js';
 
 const keys = newKeyMaterial();
@@ -725,5 +725,58 @@ describe('read', () => {
 
     expect(readdirSync(dir).filter((n) => n.startsWith('zas-agent-'))).toEqual([]);
     expect(tmpLeftovers(dir)).toEqual([]);
+  });
+});
+
+describe('loadItem', () => {
+  // Grants are cached per profile under the agent home, so every fake server
+  // here gets a profile of its own, in a home that is not the machine's.
+  let home = '';
+  beforeEach(() => {
+    home = mkdtempSync(join(tmpdir(), 'zas-load-'));
+    process.env.ZAS_AGENT_HOME = home;
+  });
+  afterEach(() => {
+    delete process.env.ZAS_AGENT_HOME;
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  it('hands back the grant, the row, the manifest, and the update time in milliseconds', async () => {
+    const server = fakeServer({
+      docs: [{
+        ...(linkDoc('L1', {
+          manifest_enc: { stringValue: sealedOf(note('hola')) },
+          agent: { stringValue: identity.agent_uid },
+        }) as object),
+        // Firestore keeps microseconds; Date.parse keeps milliseconds, which
+        // is what the server compares against.
+        updateTime: '2026-09-01T10:00:00.123456Z',
+      }],
+    });
+    const item = await loadItem({ identity, client: server.client, profile: 'p' }, 'ch1', 'L1');
+    expect(item.row.id).toBe('L1');
+    expect(item.row.agent).toBe(identity.agent_uid);
+    expect(item.row.updateTime).toBe(Date.parse('2026-09-01T10:00:00.123Z'));
+    expect(item.manifest.text).toBe('hola');
+    expect(item.grant.channel_id).toBe('ch1');
+  });
+
+  it('reads null for a row that carries no update time, and refuses what getItem refuses', async () => {
+    const bare = fakeServer({
+      docs: [{
+        name: `${DOC_ROOT}/accounts/${identity.owner_uid}/channels/ch1/links/L1`,
+        fields: { manifest_enc: { stringValue: sealedOf(note('hola')) } },
+      }],
+    });
+    const item = await loadItem({ identity, client: bare.client, profile: 'p-bare' }, 'ch1', 'L1');
+    expect(item.row.updateTime).toBeNull();
+    expect(item.row.agent).toBeUndefined();
+
+    const noRead = fakeServer({ grants: [grant({ read: false })] });
+    await expect(loadItem({ identity, client: noRead.client, profile: 'p-noread' }, 'ch1', 'L1'))
+      .rejects.toMatchObject({ code: 'read_forbidden' });
+    const gone = fakeServer({ docs: [] });
+    await expect(loadItem({ identity, client: gone.client, profile: 'p-gone' }, 'ch1', 'L1'))
+      .rejects.toMatchObject({ code: 'not_found' });
   });
 });

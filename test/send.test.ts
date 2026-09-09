@@ -12,8 +12,12 @@ import { oprfBlind, oprfEvaluate as oprfEvaluateServer, oprfFinalize, serverKeyF
 import { assignChannelKey, mintChannelKey } from '../src/shared/sharedchannel.js';
 import type { ZasClient } from '../src/client.js';
 import { errorFromResponse, ZasError } from '../src/errors.js';
-import { defaultEndpoints, newKeyMaterial, profileDir, type Identity, type RemoteGrant } from '../src/identity.js';
-import { MAX_REFUSALS_PER_SEND, mimeFor, OPRF_PROBE_BATCH, sendFile, sendNote, type SendContext } from '../src/send.js';
+import {
+  defaultEndpoints, loadFingerprints, newKeyMaterial, profileDir, saveFingerprints, type Identity, type RemoteGrant,
+} from '../src/identity.js';
+import {
+  forgetLink, MAX_REFUSALS_PER_SEND, mimeFor, OPRF_PROBE_BATCH, sendFile, sendNote, type SendContext,
+} from '../src/send.js';
 
 const SERVER_KEY = serverKeyFromSeed(new Uint8Array(32).fill(7));
 const keys = newKeyMaterial();
@@ -957,5 +961,31 @@ describe('send', () => {
     expect(mimeFor('deck.pptx')).toBe('application/vnd.openxmlformats-officedocument.presentationml.presentation');
     expect(mimeFor('archivo.sin-extension')).toBe('application/octet-stream');
     expect(mimeFor('LICENSE')).toBe('application/octet-stream');
+  });
+});
+
+describe('forgetLink', () => {
+  let home = '';
+  beforeEach(() => {
+    home = mkdtempSync(join(tmpdir(), 'zas-forget-'));
+    process.env.ZAS_AGENT_HOME = home;
+  });
+  afterEach(() => {
+    delete process.env.ZAS_AGENT_HOME;
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  it('drops every receipt naming the link and keeps the rest', () => {
+    const at = Date.now();
+    saveFingerprints('p', { entries: {
+      a: { link_id: 'L1', bytes: 1, chunks: 1, deduplicated: 0, at },
+      b: { link_id: 'L1', bytes: 2, chunks: 1, deduplicated: 0, at },
+      c: { link_id: 'L2', bytes: 3, chunks: 1, deduplicated: 0, at },
+    } });
+    forgetLink('p', 'L1');
+    expect(Object.keys(loadFingerprints('p').entries)).toEqual(['c']);
+    // Nothing to drop writes nothing.
+    forgetLink('p', 'L9');
+    expect(loadFingerprints('p').entries.c.bytes).toBe(3);
   });
 });

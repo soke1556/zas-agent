@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-09-09
+
+### Added
+
+- `zas_edit_item`. An agent changes an item it sent, under the same id: the
+  title of a file or a note, or a note's text, language and secret cover.
+  The owner's activity log records the edit, and the channel's devices are
+  woken. An item somebody else sent is refused as `not_yours`.
+- `zas_replace_file`. An agent swaps the bytes under a file it sent, keeping
+  the item id, its place in the channel and its pin. The old chunks are
+  released and the new ones charged in one server transaction; a chunk in
+  both versions is left alone. A note, an item with a public share, and an
+  item somebody else sent are refused. Agents only: no web or mobile client
+  gets a replace.
+- Five codes: `not_yours`, `stale` (the item changed while the agent was
+  working on it: read it again and retry), `not_a_note`, `not_a_file`,
+  `item_shared`.
+- Both tools drop the local send receipts for the item they changed, so
+  "send that again" after an edit makes a new item.
+
+### Fixed
+
+- A machine whose agent home could not be written crashed on the way into
+  serving, before the MCP initialize response, because recording that the
+  telemetry notice had been shown threw. The notice is printed and the
+  failure to record it is logged; the server starts either way. This is the
+  crash behind "connection closed: initialize response" from a Codex-style
+  host.
+
+
 ## [0.8.0] - 2026-09-06
 
 ### Added
@@ -303,7 +333,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   two separate identities that cannot read each other's keys.
 - Install snippets for Claude Code and Codex, printed by `zas-agent pair`.
 
-[Unreleased]: https://github.com/soke1556/zas-agent/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/soke1556/zas-agent/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/soke1556/zas-agent/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/soke1556/zas-agent/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/soke1556/zas-agent/compare/v0.6.3...v0.7.0
 [0.6.3]: https://github.com/soke1556/zas-agent/compare/v0.6.2...v0.6.3

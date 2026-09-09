@@ -39,6 +39,8 @@ export const PRODUCT_EVENTS = [
   'enterprise.invite_attach',
   'enterprise.invite_accept',
   'enterprise.invite_admin',
+  'enterprise.signin',
+  'enterprise.org_create',
   'enterprise.workspace_opened',
   'enterprise.workspace_switched',
   'enterprise.channel_created',
@@ -83,7 +85,17 @@ export const PRODUCT_EVENTS = [
   'agent.paired',
   'agent.revoked',
   'agent.send',
+  'agent.edit',
+  'agent.replace',
   'agent.tool_call',
+  // The public pages, which until now reported nothing at all: `capture_pageview`
+  // is off, so a visitor who read the enterprise page and left was invisible.
+  // These five are the funnel that ends at `enterprise.org_create`.
+  'marketing.page_viewed',
+  'marketing.section_viewed',
+  'marketing.scroll_depth',
+  'marketing.cta_clicked',
+  'marketing.language_switched',
 ] as const;
 
 export type ProductEvent = (typeof PRODUCT_EVENTS)[number];
@@ -98,6 +110,8 @@ export const SERVER_OWNED_PRODUCT_EVENTS = [
   'share_downloaded',
   'share_signin_click',
   'agent.send',
+  'agent.edit',
+  'agent.replace',
   'agent.tool_call',
 ] as const satisfies readonly ProductEvent[];
 
@@ -131,12 +145,55 @@ const agentKind = oneOf('claude_code', 'codex', 'other');
  *  protocol-1 pairing, where the code was always typed. */
 const pairHandoff = oneOf('loopback', 'manual', 'unknown');
 
-/** The eleven MCP tools, without their `zas_` prefix. The agent package holds
+/** Which public page an event happened on. Closed, and deliberately not read
+ *  from the URL: `$current_url` is masked before it leaves the browser, and a
+ *  funnel that depends on parsing a masked string is a funnel that breaks
+ *  quietly the next time the mask changes. */
+const marketingSurface = oneOf('home', 'plans', 'enterprise');
+
+/** A block of one of those pages. `enterprise_band` is the Enterprise section
+ *  that closes the home page and `/plans`; the rest are sections of
+ *  `/enterprise` itself, in the order the page puts them in. */
+const marketingSection = oneOf(
+  'enterprise_band', 'hero', 'what', 'benefits', 'fit', 'billing', 'signin',
+);
+
+/** Every link and button on those pages that leads somewhere we care about. */
+const marketingCta = oneOf(
+  'see_enterprise', 'see_plans', 'contact', 'start_org', 'sign_in',
+  'open_console', 'switch_language', 'footer_home',
+);
+
+/** Where on the page the thing that was clicked sits. Two CTAs can carry the
+ *  same name in different places — "contact" is in the band, the hero and the
+ *  footer — and which one people use is the whole question. */
+const marketingPlacement = oneOf('nav', 'hero', 'band', 'fit', 'billing', 'signin', 'footer');
+
+/** How the visitor arrived, in buckets. Never the referring URL: a full
+ *  referrer is a browsing history, and the only thing worth knowing is which
+ *  of these five it was.
+ *
+ *  The property it fills is called `arrival`, not `referrer`, and the name is
+ *  load-bearing. The browser sanitizer puts every property whose name matches
+ *  /url|path|referr/ through the URL mask, which fails closed: `search` came
+ *  out the other side as `/:id`, and four of these five words collapsed into
+ *  one. A bucket is not a URL, so it must not be named like one. */
+const arrivalKind = oneOf('direct', 'internal', 'search', 'social', 'other');
+
+const uiLocale = oneOf('es-AR', 'pt-BR', 'en');
+
+/** Where the workspace sign-in card was shown. A handoff is an employee
+ *  following a link their company sent; the page is a company evaluating Zas.
+ *  Reading the two together as one number would hide both. */
+const signinContext = oneOf('page', 'handoff_site', 'handoff_share');
+
+/** The thirteen MCP tools, without their `zas_` prefix. The agent package holds
  *  its registered tools against this list, so a tool added there and not here
  *  fails a test instead of arriving as a property nobody kept. */
 export const AGENT_TOOL_NAMES = [
   'status', 'pair', 'send_file', 'send_note', 'send_direct', 'send_direct_fallback',
   'receive_direct', 'receive_direct_fallback', 'list_items', 'get_item', 'jobs',
+  'edit_item', 'replace_file',
 ] as const;
 
 /** The agent's closed error vocabulary (`SENTENCES` in `agent/src/errors.ts`),
@@ -154,6 +211,8 @@ export const AGENT_ERROR_CODES = [
   'pairing_cancelled', 'claim_mismatch', 'pairing_not_approved', 'pairing_claimed',
   'agent_limit', 'grant_limit', 'feature_disabled', 'upload_failed', 'oprf_failed',
   'network', 'sign_in_failed', 'bad_signature', 'missing_token',
+  // An agent changing its own items (2026-09-09).
+  'not_yours', 'stale', 'not_a_note', 'not_a_file', 'item_shared',
 ] as const;
 
 /** How long a tool call took, as the four buckets `agent.tool_call` documents.
@@ -219,6 +278,19 @@ const EVENT_PROPERTY_RULES: Record<ProductEvent, Readonly<Record<string, Rule>>>
     role: enterpriseRole,
     external: bool,
   },
+  // The workspace sign-in card, wherever it is shown: the public enterprise
+  // page, a `?site=` handoff from a customer domain, or a `?share=` link.
+  'enterprise.signin': {
+    context: signinContext,
+    stage: oneOf(
+      'shown', 'email_submitted', 'email_sent', 'email_failed',
+      'provider_clicked', 'link_completed', 'link_failed',
+    ),
+    provider: oneOf('google.com', 'apple.com', 'email_link', 'none'),
+  },
+  // The end of the funnel. `opened` is the create form appearing, which is
+  // what someone signing in with no organization yet is shown.
+  'enterprise.org_create': { stage: oneOf('opened', 'submitted', 'created', 'failed') },
   'enterprise.workspace_opened': { role: enterpriseRole, first_visit: bool },
   'enterprise.workspace_switched': { destination: oneOf('personal', 'organization'), role: enterpriseRole },
   'enterprise.channel_created': { member_count: count },
@@ -363,9 +435,32 @@ const EVENT_PROPERTY_RULES: Record<ProductEvent, Readonly<Record<string, Rule>>>
   },
   'agent.revoked': { agent_kind: agentKind },
   'agent.send': { size_bucket: sizeBucket, agent_kind: agentKind },
+  'agent.edit': { agent_kind: agentKind },
+  'agent.replace': { size_bucket: sizeBucket, agent_kind: agentKind },
   // What the CLI reports after every tool call: the tool, whether it worked,
   // the code when it did not, and the version that answered. No path, no file
   // name, no channel, no sentence.
+  'marketing.page_viewed': {
+    surface: marketingSurface,
+    locale: uiLocale,
+    // Whether the URL carried a language prefix. `/en/enterprise` and
+    // `/enterprise` are the same page in different languages, and which one
+    // search sends people to is worth knowing on its own.
+    prefixed: bool,
+    signed_in: bool,
+    arrival: arrivalKind,
+  },
+  'marketing.section_viewed': { surface: marketingSurface, section: marketingSection },
+  'marketing.scroll_depth': {
+    surface: marketingSurface,
+    depth: oneOf('p25', 'p50', 'p75', 'p100'),
+  },
+  'marketing.cta_clicked': {
+    surface: marketingSurface,
+    cta: marketingCta,
+    placement: marketingPlacement,
+  },
+  'marketing.language_switched': { surface: marketingSurface, from: uiLocale, to: uiLocale },
   'agent.tool_call': {
     tool: oneOf(...AGENT_TOOL_NAMES),
     result: oneOf('ok', 'error'),

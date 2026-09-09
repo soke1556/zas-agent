@@ -25,9 +25,10 @@ scope to the channels you choose, and that you can revoke.
 
 ## What it does
 
-Your coding agent gets eleven tools. It can send a file or a note into a channel
+Your coding agent gets thirteen tools. It can send a file or a note into a channel
 you picked, send or receive a file live through Directo, list what is in that
-channel, and pull one item back onto disk.
+channel, pull one item back onto disk, and change what it sent: an item's
+title or text, or the bytes under a file, keeping the item id.
 Everything it sends is encrypted on your machine before it leaves, lands in your
 account, and is marked in the channel as sent by that agent. The agent has an
 identity of its own and never holds your account key: pairing mints a key pair
@@ -166,6 +167,11 @@ ones marked *(server-side)* are enforced by the Zas server.
 - **No stored sending into a view-only channel, and none into a channel in
   Directo mode.** Both are refused before a byte is uploaded. A channel in
   Directo mode takes `zas_send_direct`, a live transfer that stores nothing.
+- **No changing what it did not send.** `zas_edit_item` and `zas_replace_file`
+  act only on items carrying this agent's mark; anything else is `not_yours`,
+  and the server refuses it too *(server-side)*. A replace is for agents only:
+  no web or mobile client gets one. An item with a public share is not
+  replaced until the share is removed.
 - **No receiving unless the grant says read.** Receiving through Directo
   writes a file onto this machine, so `zas_receive_direct` takes the same
   `read` switch as listing. And it only ever runs inside a tool call: the
@@ -213,6 +219,11 @@ string ever reaches a terminal.
 | `file_too_big` | The file is over the plan limit. |
 | `duplicate` | That item is already in the channel. |
 | `not_found` | That item is not in the channel. |
+| `not_yours` | That item was not sent by this agent; it can only change its own items. |
+| `stale` | That item changed while this agent was working on it; read it again and retry. |
+| `not_a_note` | That item is a file, not a note; only its title can change. |
+| `not_a_file` | That item is a note, not a file. |
+| `item_shared` | That item has a public share; the owner removes the share first. |
 | `invalid_cap` | That file is no longer available. |
 | `write_failed` | The download destination could not be written. |
 | `pairing_expired` | The pairing expired; pair again. |
@@ -243,11 +254,22 @@ stack trace.
 | `zas_receive_direct_fallback` | After a Directo receive failed in flight, downloads the encrypted copy the sender chose to store, and decrypts it to the same destination. |
 | `zas_list_items` | Lists the most recent items in one of the owner's channels. Needs a grant that includes reading. |
 | `zas_get_item` | Fetches one item. A note comes back as text; a file is written to disk. It never overwrites, so the path it answers with can differ from the one you asked for. |
+| `zas_edit_item` | Changes an item this agent sent, keeping its id: the title of a file or a note, or a note's text, language and secret cover. Needs a grant that includes reading and sending. The owner's activity log records it. |
+| `zas_replace_file` | Replaces the bytes of a file this agent sent with a file from this machine, keeping the item id, its place in the channel and its pin. Returns the item id, or a job id after a minute. Refuses notes, shared items, and items sent by anyone else. |
 | `zas_jobs` | Lists the sends and Directo transfers this server started, newest first, with the phase each one reached — and where a `job_id` from a long send is redeemed. |
 
 `channel` takes a channel name or a channel id. A name has to match exactly one
 of the channels you granted; with exactly one grant, `zas_send_file`,
-`zas_send_note`, `zas_send_direct` and `zas_receive_direct` can leave it out.
+`zas_send_note`, `zas_send_direct`, `zas_receive_direct`, `zas_edit_item` and
+`zas_replace_file` can leave it out.
+
+A replace runs the same pipeline as a send — hash, key derivation, encryption,
+then upload or proof per chunk — and posts the new set with the old one to
+release. The server moves both sets, the account's storage tally and the item
+in one transaction, so a failure leaves everything as it was; a chunk present
+in both versions is neither uploaded nor released. Both tools read the item
+first and write only over the version they read: an item that changed in
+between answers `stale`, and nothing is lost.
 
 Directo needs a native module, [node-datachannel](https://github.com/murat-dogan/node-datachannel),
 WebRTC for Node. npm installs a prebuilt binary for Windows, macOS and Linux;

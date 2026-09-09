@@ -6,8 +6,8 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { isInvokedDirectly, main, parseArgs } from '../src/cli.js';
-import { telemetryState } from '../src/telemetry.js';
+import { isInvokedDirectly, main, noticeOnServe, parseArgs } from '../src/cli.js';
+import { noticeShown, telemetryState } from '../src/telemetry.js';
 
 describe('isInvokedDirectly', () => {
   let dir = '';
@@ -117,5 +117,47 @@ describe('the telemetry command', () => {
     expect(await main(['telemetry', 'on'], (line) => lines.push(line))).toBe(0);
     expect(telemetryState()).toEqual({ on: true, source: 'file' });
     expect(lines.join('\n')).toContain('telemetry: on (zas-agent telemetry)');
+  });
+});
+
+// Serving must never die on the way in. The telemetry notice is a courtesy
+// printed once per machine; recording that it was printed writes a file, and a
+// machine where that write fails (a read-only home, a directory somebody else
+// owns) would otherwise exit before the MCP client's `initialize` was
+// answered — which the client reports as "connection closed", with the real
+// reason only in a log nobody opens.
+describe('the telemetry notice on the way into serving', () => {
+  let home = '';
+  let dir = '';
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'zas-agent-cli-notice-'));
+    home = join(dir, 'home');
+    process.env.ZAS_AGENT_HOME = home;
+  });
+
+  afterEach(() => {
+    delete process.env.ZAS_AGENT_HOME;
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('prints once, and records that it did', () => {
+    const lines: string[] = [];
+    noticeOnServe((line) => lines.push(line));
+    expect(lines.join('\n')).toContain('to improve the product');
+    expect(noticeShown()).toBe(true);
+
+    lines.length = 0;
+    noticeOnServe((line) => lines.push(line));
+    expect(lines).toEqual([]);
+  });
+
+  it('still lets the server start when the record cannot be written', () => {
+    // The agent home is a file: every directory creation under it fails.
+    writeFileSync(home, 'not a directory');
+    const lines: string[] = [];
+    expect(() => noticeOnServe((line) => lines.push(line))).not.toThrow();
+    expect(lines.join('\n')).toContain('to improve the product');
+    expect(lines.join('\n')).toContain('Serving anyway');
   });
 });

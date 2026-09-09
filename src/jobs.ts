@@ -29,7 +29,7 @@ export interface JobError {
 
 export interface Job {
   id: string;
-  kind: 'file' | 'note' | 'direct' | 'receive' | 'fallback';
+  kind: 'file' | 'note' | 'direct' | 'receive' | 'fallback' | 'replace';
   title: string;
   channel: string;
   started_at: number;

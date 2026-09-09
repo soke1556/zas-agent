@@ -94,6 +94,25 @@ const USAGE = [
   '  zas-agent --version',
 ].join('\n');
 
+/** The telemetry notice, once per machine, on the way into serving. Somebody
+ *  who upgraded never runs `pair` again, so this is where they read it; it goes
+ *  to stderr, where the client keeps its log.
+ *
+ *  Recording that it was printed writes a file, and that write is allowed to
+ *  fail. A home that is read-only, or a directory another user owns, used to
+ *  end the process here — before the client's `initialize` was answered, which
+ *  it reports as "connection closed" with the cause in a log nobody opens. The
+ *  notice is a courtesy; serving is the job. */
+export function noticeOnServe(log: (line: string) => void): void {
+  try {
+    if (noticeShown()) return;
+    log(TELEMETRY_NOTICE);
+    markNoticeShown();
+  } catch (e) {
+    log(`Could not record that the notice was shown (${String((e as Error)?.message ?? e)}). Serving anyway.`);
+  }
+}
+
 export async function main(argv: string[], log: (line: string) => void = (l) => console.error(l)): Promise<number> {
   const args = parseArgs(argv);
 
@@ -168,12 +187,7 @@ export async function main(argv: string[], log: (line: string) => void = (l) => 
     return 0;
   }
 
-  // Somebody who upgraded never runs `pair` again. Once per machine, on the
-  // way into serving, the notice goes to stderr where the client keeps its log.
-  if (!noticeShown()) {
-    log(TELEMETRY_NOTICE);
-    markNoticeShown();
-  }
+  noticeOnServe(log);
   await buildServer(args.profile).connect(new StdioServerTransport());
   // The transport owns the process from here: it holds stdin open, and the
   // client closing it is what ends the run.
