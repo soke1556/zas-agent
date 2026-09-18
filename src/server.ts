@@ -142,11 +142,13 @@ export function buildServer(profile: string, deps: ServerDeps = {}): McpServer {
     const started = Date.now();
     try {
       const answer = await handler(...args);
-      void reportCall(name, Date.now() - started, answeredCode(answer));
+      const elapsed = Date.now() - started;
+      setImmediate(() => void reportCall(name, elapsed, answeredCode(answer))).unref();
       return answer;
     } catch (e) {
       // Not how these tools answer, but a throw is still a call that failed.
-      void reportCall(name, Date.now() - started, e instanceof ZasError ? e.code : 'internal');
+      const elapsed = Date.now() - started;
+      setImmediate(() => void reportCall(name, elapsed, e instanceof ZasError ? e.code : 'internal')).unref();
       throw e;
     }
   });

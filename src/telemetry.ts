@@ -55,7 +55,8 @@ export function markNoticeShown(): void {
 export const TELEMETRY_NOTICE = [
   'Zas collects usage data from this agent to improve the product: which tool',
   'ran, whether it worked, the error code when it did not, how long it took,',
-  'and the version. Never file names, file contents, paths or channel names.',
+  'item type, transfer stages, byte counts, outcomes, and the version.',
+  'Never file names, file contents, paths or channel names.',
   'The data is linked to your Zas account.',
   'Turn it off with: npx -y zas-agent telemetry off',
 ].join('\n');
@@ -123,14 +124,16 @@ const REPORT_TIMEOUT_MS = 5_000;
  *  answered: a tool call's result must not depend on whether analytics worked.
  *  Off means no request at all. */
 export async function report(client: ZasClient, properties: AnalyticsProperties | null): Promise<void> {
-  if (properties === null || !telemetryState().on) return;
+  if (properties === null) return;
+  await new Promise<void>(resolve => { const timer = setTimeout(resolve, 0); timer.unref?.(); });
+  if (!telemetryState().on) return;
   const timeout = new Promise<void>((resolve) => {
     const timer = setTimeout(resolve, REPORT_TIMEOUT_MS);
     // Nothing here is a reason to keep the process alive.
     timer.unref?.();
   });
-  const sent = client
-    .api('POST', '/agents/telemetry', { event: 'agent.tool_call', properties })
+  const body = { event: 'agent.tool_call', properties };
+  const sent = (client.reportTelemetry ? client.reportTelemetry(body) : client.api('POST', '/agents/telemetry', body))
     .then(() => undefined)
     .catch(() => undefined);
   await Promise.race([sent, timeout]);

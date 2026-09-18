@@ -57,6 +57,7 @@ function fakeWire(opts: { grants?: RemoteGrant[]; states?: (string | null)[] } =
   const calls: { method: string; path: string; body?: Record<string, unknown> }[] = [];
   let answered = false;
   const api = vi.fn(async (method: string, path: string, body?: Record<string, unknown>) => {
+    if (path === '/agents/telemetry') return { ok: true };
     calls.push({ method, path, body });
     if (method === 'GET' && path === '/agents/me') return { grants };
     if (path === '/direct/ch1') return { id: 'o1' };

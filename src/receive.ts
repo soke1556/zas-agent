@@ -1,3 +1,4 @@
+import { TransferTelemetry, itemKind } from './transfer-telemetry.js';
 // Directo into this machine. The mirror of `direct.ts` — the same engine, the
 // same sealed signals polled through Firestore REST, the same per-job device
 // token — pointed the other way. What is new is the wait for somebody else's
@@ -223,7 +224,7 @@ class DiskSink implements Sink {
   }
 }
 
-export async function receiveDirect(
+async function receiveDirectMeasured(
   ctx: SendContext,
   input: ReceiveInput,
   report: (phase: ReceiveJobPhase) => void,
@@ -298,6 +299,7 @@ export async function receiveDirect(
     await sleep(deps.offerPollMs ?? OFFER_POLL_MS);
   }
   const offered = meta!;
+  ctx.transferTelemetry?.describe(offered.size);
   const offerId = id;
 
   // ---- the engine ----
@@ -418,7 +420,7 @@ export async function receiveDirect(
 /** The reliable-delivery path for a receive that failed in flight: the sender
  *  chose to store an encrypted copy, and this downloads and decrypts it onto
  *  the same destination the live run would have used. */
-export async function receiveDirectFallback(
+async function receiveDirectFallbackMeasured(
   ctx: SendContext,
   record: FailedReceive,
   report: (phase: ReceiveJobPhase) => void,
@@ -480,4 +482,26 @@ export async function receiveDirectFallback(
     path: sink.target!,
     duration_ms: now() - startedAt,
   };
+}
+
+export async function receiveDirect(...args: Parameters<typeof receiveDirectMeasured>): ReturnType<typeof receiveDirectMeasured> {
+  const telemetry = new TransferTelemetry(args[0].client, 'download', 'file', 'direct');
+  try {
+    const report = args[2];
+    const result = await receiveDirectMeasured({ ...args[0], transferTelemetry: telemetry }, args[1], (phase) => { telemetry.mark(phase); report?.(phase); }, args[3]);
+    telemetry.describe(result.bytes);
+    telemetry.finish('success', 'none', false);
+    return result;
+  } catch (error) { telemetry.failed(error); throw error; }
+}
+
+export async function receiveDirectFallback(...args: Parameters<typeof receiveDirectFallbackMeasured>): ReturnType<typeof receiveDirectFallbackMeasured> {
+  const telemetry = new TransferTelemetry(args[0].client, 'download', 'file', 'fallback');
+  try {
+    const report = args[2];
+    const result = await receiveDirectFallbackMeasured({ ...args[0], transferTelemetry: telemetry }, args[1], (phase) => { telemetry.mark(phase); report?.(phase); }, args[3]);
+    telemetry.describe(result.bytes);
+    telemetry.finish('success', 'none', false);
+    return result;
+  } catch (error) { telemetry.failed(error); throw error; }
 }

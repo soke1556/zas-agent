@@ -1,3 +1,4 @@
+import { TransferTelemetry, itemKind } from './transfer-telemetry.js';
 // The read half of the protocol: what a channel holds, and the bytes behind
 // one row. It is the browser's download path with nothing added — the same
 // Firestore rows, the same sealed manifest, the same public redeem, the same
@@ -257,6 +258,7 @@ function redeemFailure(status: number): ZasError {
  *  web has none either, and a cap the server refuses is simply a chunk nobody
  *  can read until its owner opens Zas and the manifest is written again. */
 async function fetchChunk(ctx: SendContext, chunk: ManifestChunk): Promise<Uint8Array> {
+  ctx.transferTelemetry?.mark('authorization');
   if (typeof chunk.cap !== 'string' || chunk.cap === '') throw new ZasError('invalid_cap', 403);
   // Presented for the same reason the browser presents it: an organization's
   // objects re-check live membership before the storage URL is issued, and a
@@ -284,6 +286,7 @@ async function fetchChunk(ctx: SendContext, chunk: ManifestChunk): Promise<Uint8
   // A 200 with no URL is a refusal in every way that matters here.
   if (url === '') throw new ZasError('invalid_cap', 403);
 
+  ctx.transferTelemetry?.mark('downloading');
   const res = await fetch(url);
   if (!res.ok) {
     await res.body?.cancel().catch(() => undefined);
@@ -291,6 +294,7 @@ async function fetchChunk(ctx: SendContext, chunk: ManifestChunk): Promise<Uint8
   }
   const ciphertext = new Uint8Array(await res.arrayBuffer());
   try {
+    ctx.transferTelemetry?.mark('decrypting');
     return decryptChunk(b64ToBytes(chunk.key), b64ToBytes(chunk.nonce), ciphertext);
   } catch {
     // The manifest and the object disagree. The bytes are unusable and the cap
@@ -387,13 +391,15 @@ export async function loadItem(
   return { grant, channelKey, row, manifest };
 }
 
-export async function getItem(
+async function getItemMeasured(
   ctx: SendContext,
   channel: string | undefined,
   id: string,
   dest?: string,
 ): Promise<{ path?: string; text?: string; bytes: number }> {
+  ctx.transferTelemetry?.mark('authorization');
   const { row, manifest } = await loadItem(ctx, channel, id);
+  ctx.transferTelemetry?.describe(manifest.size, itemKind(manifest), manifest.kind === 'text' ? 'manifest' : 'storage');
 
   if (manifest.kind === 'text') {
     const text = manifest.text ?? '';
@@ -433,7 +439,10 @@ export async function getItem(
     for (const chunk of manifest.chunks) {
       // The count comes from the write, not from the chunk: a short write is
       // then a size mismatch below rather than a silently truncated file.
-      written += writeSync(fd, await fetchChunk(ctx, chunk));
+      const bytes = await fetchChunk(ctx, chunk);
+      ctx.transferTelemetry?.mark('assembling');
+      written += writeSync(fd, bytes);
+      ctx.transferTelemetry?.progress(written);
     }
     // The manifest said how big the file is. Anything else — a truncated
     // manifest, or the `chunks: []` that openManifest supplies for one that
@@ -474,3 +483,15 @@ export async function getItem(
   }
   return { path: target, bytes: written };
 }
+
+export async function getItem(...args: Parameters<typeof getItemMeasured>): ReturnType<typeof getItemMeasured> {
+  const telemetry = new TransferTelemetry(args[0].client, 'download', 'unknown', 'manifest');
+  try {
+    const result = await getItemMeasured({ ...args[0], transferTelemetry: telemetry }, ...args.slice(1) as Tail<typeof args>);
+    telemetry.describe(result.bytes);
+    telemetry.finish('success', 'none', false);
+    return result;
+  } catch (error) { telemetry.failed(error); throw error; }
+}
+
+type Tail<T extends unknown[]> = T extends [unknown, ...infer R] ? R : never;

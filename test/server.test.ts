@@ -77,7 +77,7 @@ function recordingClient(answer: (path: string) => Promise<unknown>): {
   } as unknown as ZasClient;
   return {
     client,
-    reported: () => bodies.filter((c) => c.path === '/agents/telemetry').map((c) => c.body as Record<string, unknown>),
+    reported: () => bodies.filter((c) => c.path === '/agents/telemetry').flatMap((c) => { const body = c.body as Record<string, unknown>; return Array.isArray(body.events) ? body.events as Record<string, unknown>[] : [body]; }),
   };
 }
 
@@ -208,6 +208,7 @@ describe('buildServer', () => {
     const client = await connect(buildServer('p', { identity, client: api }));
     const status = await call(client, 'zas_status');
     expect(status.isError).toBe(false);
+    await vi.waitFor(() => expect(reported().some(e => e.event === 'agent.tool_call')).toBe(true));
     expect(reported()).toEqual([{
       event: 'agent.tool_call',
       properties: expect.objectContaining({ tool: 'status', result: 'ok', code: 'none', duration_bucket: 'lt_1s' }),
@@ -220,14 +221,35 @@ describe('buildServer', () => {
     const client = await connect(buildServer('p', { identity, client: api }));
     const refused = await call(client, 'zas_send_note', { text: 'hola', channel: 'Trabajo' });
     expect(refused.isError).toBe(true);
-    expect(reported()).toEqual([{
+    await vi.waitFor(() => expect(reported().some(e => e.event === 'agent.tool_call')).toBe(true));
+    expect(reported().filter(e => e.event === 'agent.tool_call')).toEqual([{
       event: 'agent.tool_call',
       properties: expect.objectContaining({ tool: 'send_note', result: 'error', code: 'agent_revoked' }),
     }]);
+    expect(reported().filter(e => e.event === 'transfer.started')).toHaveLength(1);
+    expect(reported().filter(e => e.event === 'transfer.finished')).toEqual([expect.objectContaining({
+      properties: expect.objectContaining({item_kind:'text',transport:'manifest',outcome:'failure',error_code:'authorization'}),
+    })]);
     // The channel and the text the call carried are not in the report.
     expect(JSON.stringify(reported())).not.toContain('hola');
     expect(JSON.stringify(reported())).not.toContain('Trabajo');
     await client.close();
+  });
+
+  it('returns a tool result while telemetry requests never resolve', async () => {
+    const blocked = new Promise<unknown>(() => {});
+    const api = { identity, api: vi.fn(async (_method: string, path: string) => {
+      if (path === '/agents/telemetry') return blocked;
+      return { grants: [grant('c1', workKey, 'Trabajo', true)] };
+    }) } as unknown as ZasClient;
+    const client = await connect(buildServer('p', {identity, client:api}));
+    try {
+      const first = await call(client, 'zas_status');
+      expect(first.isError).toBe(false);
+      await vi.waitFor(() => expect(api.api).toHaveBeenCalledWith('POST','/agents/telemetry',expect.anything()));
+      const second = await call(client, 'zas_status');
+      expect(second.isError).toBe(false);
+    } finally { await client.close(); }
   });
 
   it('reports nothing from a profile that is not paired', async () => {

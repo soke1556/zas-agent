@@ -306,14 +306,16 @@ covers every profile on the machine; pairing again does not reset it.
 
 What one report carries, and nothing else: the tool that ran, whether it
 worked, the closed error code when it did not, which of four duration buckets
-it fell in, and the package version. No file name, no file contents, no path,
+it fell in, and the package version. Item transfers also report item category,
+transport, byte counts, stage durations, and success/failure/cancellation, joined
+by a random per-attempt ID. No file name, no file contents, no path,
 no channel name, no error message, no stack.
 
 Where it goes: to Zas, never to an analytics service directly. This package
 holds no analytics token and opens no connection to a third party, so no
 address of yours reaches one. The report is attributed to the Zas account the
 agent is paired with, which the server reads from the session — the request
-carries no identifier of its own. Nothing is reported before pairing, because
+carries no account or content identifier. Nothing is reported before pairing, because
 until then there is no account it could belong to.
 
 A report is never allowed to matter: it is sent after the answer, waited on

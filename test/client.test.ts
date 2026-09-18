@@ -79,3 +79,24 @@ describe('ZasClient', () => {
     expect(log.filter((l) => l.endsWith('/evaluate'))).toHaveLength(2);
   });
 });
+
+it('telemetry never signs in, refreshes on a refusal, or starts concurrent requests', async () => {
+  const log: string[] = [];
+  const wire = fakeFetch(log);
+  let resolveReport!: (res: Response) => void;
+  const report = vi.fn(() => new Promise<Response>(resolve => { resolveReport = resolve; }));
+  const client = new ZasClient(identity, { now: wire.now, fetch: ((url, init) =>
+    String(url).endsWith('/agents/telemetry') ? report() : wire.fetch(url, init)) as typeof fetch });
+  await client.reportTelemetry({events:[]});
+  expect(log).toEqual([]); expect(report).not.toHaveBeenCalled();
+  await client.idToken();
+  const authCalls = log.length;
+  const pending = client.reportTelemetry({events:[]});
+  await client.reportTelemetry({events:[]});
+  expect(report).toHaveBeenCalledOnce();
+  resolveReport(new Response(null,{status:401})); await pending;
+  expect(log).toHaveLength(authCalls);
+  wire.tick(3600000);
+  await client.reportTelemetry({events:[]});
+  expect(log).toHaveLength(authCalls); expect(report).toHaveBeenCalledOnce();
+});

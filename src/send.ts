@@ -1,3 +1,4 @@
+import { TransferTelemetry, itemKind } from './transfer-telemetry.js';
 // The send pipeline, port of the browser worker (web/src/worker/send.worker.ts)
 // and of scripts/dedup-bench.ts: chunk -> BLAKE3 -> OPRF -> MLE encrypt ->
 // probe -> upload or prove -> link. The protocol is the client protocol; an
@@ -28,6 +29,8 @@ import { thumbnailFor } from './thumbnail.js';
 export type SendPhase = 'hashing' | 'encrypting' | 'uploading' | 'finishing';
 
 export interface SendContext {
+  /** Internal, per-attempt instrumentation; never persisted. */
+  transferTelemetry?: TransferTelemetry;
   identity: Identity;
   client: ZasClient;
   profile: string;
@@ -523,7 +526,7 @@ export function forgetLink(profile: string, linkId: string): void {
   if (dropped) saveFingerprints(profile, { entries });
 }
 
-export async function sendFile(
+async function sendFileMeasured(
   ctx: SendContext,
   input: SendFileInput,
   onPhase?: (phase: SendPhase) => void,
@@ -532,6 +535,7 @@ export async function sendFile(
   await checkFilePath(input.path);
   const grant = await grantFor(ctx, input.channel);
   const { bytes, name } = await readFileChecked(input.path);
+  ctx.transferTelemetry?.describe(bytes.length);
   const title = input.title ?? name;
   const contentHash = await sendIdentity(await blake3Hex(bytes), input.expires_in_days);
   const key = await receiptKey(ctx, grant.channel_id, contentHash, title);
@@ -565,6 +569,7 @@ export async function sendFile(
     ...(thumb ? { thumb_data: thumb } : {}),
     chunks: placed.map((p) => p.entry),
   });
+  ctx.transferTelemetry?.mark("finishing");
   const linkId = await postLink(
     ctx, grant, manifest, placed, agentSendIdempotencyKey(grant.channel_id, contentHash, title),
     input.expires_in_days,
@@ -591,10 +596,12 @@ export function noteName(text: string): string {
   return text.split('\n', 1)[0].trim().slice(0, NOTE_NAME_MAX) || 'nota';
 }
 
-export async function sendNote(ctx: SendContext, input: SendNoteInput): Promise<SendResult> {
+async function sendNoteMeasured(ctx: SendContext, input: SendNoteInput): Promise<SendResult> {
   const grant = await grantFor(ctx, input.channel);
   const name = input.title ?? noteName(input.text);
   const encoded = new TextEncoder().encode(input.text);
+  ctx.transferTelemetry?.describe(encoded.length);
+  ctx.transferTelemetry?.mark("encrypting");
   // The flags are part of the content, not decoration on it. Hashing the text
   // alone made "send that again, marked secret" a replay: the receipt matched,
   // the agent answered from disk, and the item in the channel kept no
@@ -634,6 +641,7 @@ export async function sendNote(ctx: SendContext, input: SendNoteInput): Promise<
     ...(input.secret ? { sensitive: true } : {}),
     chunks: [],
   });
+  ctx.transferTelemetry?.mark("finishing");
   const linkId = await postLink(
     ctx, grant, manifest, [], agentSendIdempotencyKey(grant.channel_id, contentHash, name),
     input.expires_in_days,
@@ -652,3 +660,26 @@ export async function sendNote(ctx: SendContext, input: SendNoteInput): Promise<
     replayed: false,
   };
 }
+
+export async function sendFile(...args: Parameters<typeof sendFileMeasured>): ReturnType<typeof sendFileMeasured> {
+  const telemetry = new TransferTelemetry(args[0].client, 'upload', 'file', 'storage');
+  try {
+    const report = args[2];
+    const result = await sendFileMeasured({ ...args[0], transferTelemetry: telemetry }, args[1], (phase) => { telemetry.mark(phase); report?.(phase); });
+    telemetry.describe(result.bytes);
+    telemetry.finish('success', 'none', result.replayed);
+    return result;
+  } catch (error) { telemetry.failed(error); throw error; }
+}
+
+export async function sendNote(...args: Parameters<typeof sendNoteMeasured>): ReturnType<typeof sendNoteMeasured> {
+  const telemetry = new TransferTelemetry(args[0].client, 'upload', itemKind({text: args[1].text, lang: args[1].lang}), 'manifest');
+  try {
+    const result = await sendNoteMeasured({ ...args[0], transferTelemetry: telemetry }, ...args.slice(1) as Tail<typeof args>);
+    telemetry.describe(result.bytes);
+    telemetry.finish('success', 'none', result.replayed);
+    return result;
+  } catch (error) { telemetry.failed(error); throw error; }
+}
+
+type Tail<T extends unknown[]> = T extends [unknown, ...infer R] ? R : never;

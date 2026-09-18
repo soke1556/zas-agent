@@ -115,6 +115,7 @@ function fakeServer(opts: {
   const blobOf = (path: string): string => path.slice('/blobs/'.length, path.lastIndexOf('/'));
 
   const api = vi.fn(async (method: string, path: string, body?: Record<string, unknown>) => {
+    if (path === '/agents/telemetry') return { ok: true };
     calls.push(`${method} ${path}`);
     if (method === 'GET' && path === '/agents/me') {
       return { agent_uid: identity.agent_uid, owner_uid: identity.owner_uid, grants };
@@ -274,11 +275,11 @@ describe('send', () => {
     const ctx: SendContext = { identity, client: server.client, profile: 'p' };
 
     const first = await sendFile(ctx, { path });
-    const before = server.api.mock.calls.length;
+    const before = server.api.mock.calls.filter(([, path]) => path !== '/agents/telemetry').length;
     const second = await sendFile(ctx, { path });
 
     expect(second).toEqual({ ...first, replayed: true });
-    expect(server.api.mock.calls).toHaveLength(before);
+    expect(server.api.mock.calls.filter(([, path]) => path !== '/agents/telemetry')).toHaveLength(before);
     expect(server.puts).toHaveLength(1);
   });
 
@@ -640,7 +641,7 @@ describe('send', () => {
       .mockResolvedValue({ size: 6 * 1024 * 1024 * 1024, isFile: () => true } as never);
     const ctx: SendContext = { identity, client: server.client, profile: 'p' };
     await expect(sendFile(ctx, { path })).rejects.toMatchObject({ code: 'file_too_big', status: 413 });
-    expect(server.api).not.toHaveBeenCalled();
+    expect(server.api.mock.calls.filter(([, path]) => path !== '/agents/telemetry')).toHaveLength(0);
   });
 
   it('refuses a path that is not a regular file, and one that is not there', async () => {
@@ -652,7 +653,7 @@ describe('send', () => {
     await expect(sendFile(ctx, { path: dir })).rejects.toMatchObject({ code: 'upload_failed', status: 400 });
     await expect(sendFile(ctx, { path: join(dir, 'no-existe.txt') }))
       .rejects.toMatchObject({ code: 'upload_failed', status: 400 });
-    expect(server.api).not.toHaveBeenCalled();
+    expect(server.api.mock.calls.filter(([, path]) => path !== '/agents/telemetry')).toHaveLength(0);
   });
 
   it('refuses a path it cannot stat, whatever the reason', async () => {
@@ -671,7 +672,7 @@ describe('send', () => {
     vi.spyOn(fs.promises, 'stat')
       .mockRejectedValue(Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' }) as never);
     await expect(sendFile(ctx, { path })).rejects.toMatchObject({ code: 'upload_failed', status: 400 });
-    expect(server.api).not.toHaveBeenCalled();
+    expect(server.api.mock.calls.filter(([, path]) => path !== '/agents/telemetry')).toHaveLength(0);
   });
 
   it('survives a fingerprints file that lost its entries', async () => {

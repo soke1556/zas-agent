@@ -40,6 +40,8 @@ export const PRODUCT_EVENTS = [
   'enterprise.invite_accept',
   'enterprise.invite_admin',
   'enterprise.signin',
+  'enterprise.alpha_waitlist',
+  'enterprise.alpha_access',
   'enterprise.org_create',
   'enterprise.workspace_opened',
   'enterprise.workspace_switched',
@@ -56,6 +58,11 @@ export const PRODUCT_EVENTS = [
   'share_bar_on',
   'share_bar_off',
   'upload.phase_timing',
+  'transfer.started',
+  'transfer.stage_started',
+  'transfer.phase_timing',
+  'transfer.slow',
+  'transfer.finished',
   'auth.signin_started',
   'auth.signin_result',
   'auth.session_started',
@@ -126,6 +133,7 @@ export type AnalyticsScalar = string | number | boolean;
 export type AnalyticsProperties = Record<string, AnalyticsScalar>;
 
 type Rule =
+  | { type: 'transfer_id' }
   | { type: 'boolean' }
   | { type: 'number'; min?: number }
   | { type: 'string'; values: ReadonlySet<string> };
@@ -155,7 +163,7 @@ const marketingSurface = oneOf('home', 'plans', 'enterprise');
  *  that closes the home page and `/plans`; the rest are sections of
  *  `/enterprise` itself, in the order the page puts them in. */
 const marketingSection = oneOf(
-  'enterprise_band', 'hero', 'what', 'benefits', 'fit', 'billing', 'signin',
+  'enterprise_band', 'hero', 'what', 'benefits', 'agents', 'fit', 'billing', 'signin',
 );
 
 /** Every link and button on those pages that leads somewhere we care about. */
@@ -185,7 +193,7 @@ const uiLocale = oneOf('es-AR', 'pt-BR', 'en');
 /** Where the workspace sign-in card was shown. A handoff is an employee
  *  following a link their company sent; the page is a company evaluating Zas.
  *  Reading the two together as one number would hide both. */
-const signinContext = oneOf('page', 'handoff_site', 'handoff_share');
+const signinContext = oneOf('page', 'alpha_access', 'handoff_site', 'handoff_share');
 
 /** The thirteen MCP tools, without their `zas_` prefix. The agent package holds
  *  its registered tools against this list, so a tool added there and not here
@@ -225,7 +233,34 @@ export function agentDurationBucket(ms: number): string {
   return 'gt_60s';
 }
 
+// A new random UUID per attempt; never a storage, content, or queue identifier.
+const transferProperties: Readonly<Record<string, Rule>> = {
+  transfer_id: { type: 'transfer_id' },
+  item_kind: oneOf('file', 'text', 'code', 'link', 'unknown'),
+  transport: oneOf('storage', 'manifest', 'direct', 'fallback'),
+  cache_hit: bool,
+  telemetry_version: count,
+  direction: oneOf('upload', 'download'),
+  purpose: oneOf('send', 'download', 'preview', 'export'),
+  scope: oneOf('personal', 'organization'),
+  size_bucket: sizeBucket,
+  stage: oneOf('staging', 'encrypting', 'uploading', 'finishing', 'authorization', 'downloading', 'decrypting', 'assembling'),
+  duration_ms: count,
+  bytes_completed: count,
+  size_bytes: count,
+  foreground: bool,
+  online: bool,
+  outcome: oneOf('success', 'failure', 'cancelled'),
+  error_code: oneOf('none', 'network', 'timeout', 'authorization', 'storage', 'crypto', 'worker', 'other'),
+  timing_mode: oneOf('wall', 'cumulative_work'),
+};
+
 const EVENT_PROPERTY_RULES: Record<ProductEvent, Readonly<Record<string, Rule>>> = {
+  'transfer.started': transferProperties,
+  'transfer.stage_started': transferProperties,
+  'transfer.phase_timing': transferProperties,
+  'transfer.slow': transferProperties,
+  'transfer.finished': transferProperties,
   account_created: {},
   'item.created': { kind: itemKind, size_bytes: count, size_bucket: sizeBucket },
   'item.downloaded': { size_bytes: count, size_bucket: sizeBucket },
@@ -288,9 +323,13 @@ const EVENT_PROPERTY_RULES: Record<ProductEvent, Readonly<Record<string, Rule>>>
     ),
     provider: oneOf('google.com', 'apple.com', 'email_link', 'none'),
   },
+  // Closed-alpha funnel. It intentionally names only a step: never an email,
+  // password, password cohort, access token, or raw HTTP error.
+  'enterprise.alpha_waitlist': { stage: oneOf('submitted', 'joined', 'failed') },
+  'enterprise.alpha_access': { stage: oneOf('revealed', 'submitted', 'granted', 'denied') },
   // The end of the funnel. `opened` is the create form appearing, which is
   // what someone signing in with no organization yet is shown.
-  'enterprise.org_create': { stage: oneOf('opened', 'submitted', 'created', 'failed') },
+  'enterprise.org_create': { stage: oneOf('opened', 'submitted', 'created', 'failed', 'access_required') },
   'enterprise.workspace_opened': { role: enterpriseRole, first_visit: bool },
   'enterprise.workspace_switched': { destination: oneOf('personal', 'organization'), role: enterpriseRole },
   'enterprise.channel_created': { member_count: count },
@@ -476,6 +515,7 @@ const EVENT_PROPERTY_RULES: Record<ProductEvent, Readonly<Record<string, Rule>>>
 const platformRule = oneOf('web', 'android', 'ios', 'agent', 'unknown');
 
 function valid(rule: Rule, value: unknown): value is AnalyticsScalar {
+  if (rule.type === 'transfer_id') return typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
   if (rule.type === 'boolean') return typeof value === 'boolean';
   if (rule.type === 'number') {
     return typeof value === 'number' && Number.isFinite(value) && (rule.min === undefined || value >= rule.min);
@@ -520,3 +560,7 @@ export function sanitizeAnalyticsPersonProperties(properties: unknown): Analytic
 export function isProductEvent(value: string): value is ProductEvent {
   return (PRODUCT_EVENTS as readonly string[]).includes(value);
 }
+
+/** Agent-relayed events also remain client-capturable on web and mobile. */
+export const AGENT_TRANSFER_EVENTS = ['transfer.started', 'transfer.stage_started', 'transfer.phase_timing', 'transfer.slow', 'transfer.finished'] as const;
+export type AgentTransferEvent = typeof AGENT_TRANSFER_EVENTS[number];

@@ -1,3 +1,4 @@
+import { TransferTelemetry, itemKind } from './transfer-telemetry.js';
 // Directo from this process. The engine is the web app's, unchanged
 // (shared/src/direct-engine.ts); this file adds the wiring a browser tab does
 // in Main.tsx: the offer through the API, the wait for a claim, TURN, sealed
@@ -164,7 +165,7 @@ export function sealer(key: Uint8Array, keyVersion: number) {
   };
 }
 
-export async function sendDirect(
+async function sendDirectMeasured(
   ctx: SendContext,
   input: DirectInput,
   report: (phase: DirectJobPhase) => void,
@@ -175,6 +176,7 @@ export async function sendDirect(
   const grant = await directGrantFor(ctx, input.channel);
   const key = channelKeyOf(ctx.identity, grant);
   const channelName = channelLabel(ctx, grant);
+  ctx.transferTelemetry?.mark('authorization');
   // A path this agent cannot open is one answer whatever the errno: the
   // caller named it, and a raw Node error is not a sentence.
   //
@@ -192,6 +194,7 @@ export async function sendDirect(
   // pump only the first gigabytes. Trust the on-disk size and read by offset;
   // a file under 4 GiB is handed back untouched.
   const file = directFileFrom(input.path, raw);
+  ctx.transferTelemetry?.describe(file.size);
   if (file.size > DIRECT_FILE_MAX_BYTES) throw new ZasError('file_too_big', 413);
   const name = basename(input.path);
   const cid = grant.channel_id;
@@ -336,7 +339,7 @@ export const fetchPut: PutPart = async (url, bytes, signal, onLoaded) => {
  *  "Entregar aunque se desconecten", from the same offer, as the same
  *  device. The file is encrypted in parts on this machine and only the
  *  ciphertext is stored, for one day. */
-export async function sendDirectFallback(
+async function sendDirectFallbackMeasured(
   ctx: SendContext,
   record: FailedDirect,
   report: (phase: SendPhase) => void,
@@ -350,6 +353,7 @@ export async function sendDirectFallback(
   // The offer named a size; a file that changed since is a different file,
   // and the receiver would open something the person never offered.
   if (opened.size !== record.size) throw new ZasError('file_changed', 0);
+  ctx.transferTelemetry?.describe(record.size);
   const file = new File([opened], record.name, { type: mimeFor(record.path) });
   const { seal } = sealer(record.key, record.key_version);
   const stamp = { device: record.device, owner_uid: record.owner_uid };
@@ -398,4 +402,26 @@ export async function sendDirectFallback(
     duration_ms: now() - startedAt,
     parts: parts.length,
   };
+}
+
+export async function sendDirect(...args: Parameters<typeof sendDirectMeasured>): ReturnType<typeof sendDirectMeasured> {
+  const telemetry = new TransferTelemetry(args[0].client, 'upload', 'file', 'direct');
+  try {
+    const report = args[2];
+    const result = await sendDirectMeasured({ ...args[0], transferTelemetry: telemetry }, args[1], (phase) => { telemetry.mark(phase); report?.(phase); }, args[3]);
+    telemetry.describe(result.bytes);
+    telemetry.finish('success', 'none', false);
+    return result;
+  } catch (error) { telemetry.failed(error); throw error; }
+}
+
+export async function sendDirectFallback(...args: Parameters<typeof sendDirectFallbackMeasured>): ReturnType<typeof sendDirectFallbackMeasured> {
+  const telemetry = new TransferTelemetry(args[0].client, 'upload', 'file', 'fallback');
+  try {
+    const report = args[2];
+    const result = await sendDirectFallbackMeasured({ ...args[0], transferTelemetry: telemetry }, args[1], (phase) => { telemetry.mark(phase); report?.(phase); }, args[3]);
+    telemetry.describe(result.bytes);
+    telemetry.finish('success', 'none', false);
+    return result;
+  } catch (error) { telemetry.failed(error); throw error; }
 }

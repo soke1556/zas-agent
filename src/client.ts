@@ -108,6 +108,23 @@ export class ZasClient {
     await this.pendingSignIn;
   }
 
+  private telemetrySending = false;
+  /** Optional traffic must never initiate or invalidate the shared auth session.
+   * One bounded request, no retries, and no response body parsing. */
+  async reportTelemetry(body: unknown): Promise<void> {
+    const session = this.session;
+    if (this.telemetrySending || !session || session.expiresAt <= this.now() + REFRESH_MARGIN_MS) return;
+    this.telemetrySending = true;
+    try {
+      const res = await this.call(`${this.identity.api_base}/v1/agents/telemetry`, {
+        ...jsonInit('POST', body, { Authorization: `Bearer ${session.idToken}` }),
+        signal: AbortSignal.timeout(2000),
+      });
+      await res.body?.cancel().catch(() => undefined);
+    } catch { /* drop on timeout, refusal or offline; never retry or refresh */ }
+    finally { this.telemetrySending = false; }
+  }
+
   async api<T>(method: string, path: string, body?: unknown, headers: Record<string, string> = {}): Promise<T> {
     const res = await this.authedRetrying(`${this.identity.api_base}/v1${path}`, method, body, headers);
     const parsed = res.status === 204 ? undefined : await readBody(res);
