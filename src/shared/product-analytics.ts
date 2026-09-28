@@ -157,7 +157,7 @@ const pairHandoff = oneOf('loopback', 'manual', 'unknown');
  *  from the URL: `$current_url` is masked before it leaves the browser, and a
  *  funnel that depends on parsing a masked string is a funnel that breaks
  *  quietly the next time the mask changes. */
-const marketingSurface = oneOf('home', 'plans', 'enterprise');
+const marketingSurface = oneOf('home', 'plans', 'enterprise', 'app');
 
 /** A block of one of those pages. `enterprise_band` is the Enterprise section
  *  that closes the home page and `/plans`; the rest are sections of
@@ -175,7 +175,7 @@ const marketingCta = oneOf(
 /** Where on the page the thing that was clicked sits. Two CTAs can carry the
  *  same name in different places — "contact" is in the band, the hero and the
  *  footer — and which one people use is the whole question. */
-const marketingPlacement = oneOf('nav', 'hero', 'band', 'fit', 'billing', 'signin', 'footer');
+const marketingPlacement = oneOf('nav', 'hero', 'band', 'fit', 'billing', 'signin', 'footer', 'menu', 'limit');
 
 /** How the visitor arrived, in buckets. Never the referring URL: a full
  *  referrer is a browsing history, and the only thing worth knowing is which

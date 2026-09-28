@@ -18,6 +18,9 @@ const RENAMES: Record<string, string> = {
   not_allowed: 'not_yours',
   shared: 'item_shared',
   bar_armed: 'item_shared',
+  // An organization whose plan stopped pauses every send in its channels.
+  // Retrying cannot help; only the owner or a billing admin can.
+  enterprise_plan_inactive: 'plan_inactive',
 };
 
 export class ZasError extends Error {
@@ -96,6 +99,7 @@ const SENTENCES: Record<string, string> = {
   fallback_unavailable: 'Reliable delivery is not available right now. Try again later.',
   key_stale: 'The channel key changed. The owner refreshes it by opening Zas.',
   quota_exceeded: 'The account reached its storage limit.',
+  plan_inactive: "The organization's plan is inactive, so sending to its channels is paused. The owner or a billing admin reactivates it in Zas.",
   rate_limited: 'Too many sends in a row. Wait a moment.',
   file_too_big: 'The file is over the plan limit.',
   duplicate: 'That item is already in the channel.',

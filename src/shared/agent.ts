@@ -122,6 +122,8 @@ export const AGENT_ERRORS = [
   'grant_pending',
   'direct_mode', 'not_direct_mode',
   'key_stale', 'quota_exceeded', 'rate_limited', 'file_too_big', 'duplicate', 'pairing_expired',
+  // An organization channel whose plan stopped (#27): no retry helps.
+  'plan_inactive',
   'pairing_cancelled', 'feature_disabled',
   // The claim step: a wrong code, a claim before the owner approved, a claim
   // of a pairing already claimed.

@@ -33,6 +33,10 @@ describe('errors', () => {
     expect(errorFromResponse(409, { error: 'shared' }).code).toBe('item_shared');
     expect(errorFromResponse(409, { error: 'bar_armed' }).code).toBe('item_shared');
     expect(errorFromResponse(409, { error: 'stale' }).code).toBe('stale');
+    // An organization whose plan stopped: not an upload failure to retry.
+    const paused = errorFromResponse(403, { error: 'enterprise_plan_inactive' });
+    expect(paused.code).toBe('plan_inactive');
+    expect(humanSentence(paused)).not.toMatch(/try again/i);
     expect(errorFromResponse(429, { error: 'rate_limited' }).code).toBe('rate_limited');
     expect(errorFromResponse(500, 'not json at all').code).toBe('network');
   });

@@ -5,7 +5,9 @@ For the maintainer. A release is a tag; everything after that is a workflow.
 ## Cutting one
 
 1. Make sure `main` is green and the working tree is clean.
-2. Bump `version` in `package.json`.
+2. Bump `version` in `package.json`. In the same commit, bump both `version`
+   fields in `server.json` (`version` and `packages[0].version`) to the same
+   value.
 3. Move the `## [Unreleased]` entries in `CHANGELOG.md` into a new
    `## [X.Y.Z] - YYYY-MM-DD` section, and update the two link definitions at
    the bottom.
@@ -34,8 +36,8 @@ to check — not a secret.
 The registry entry is `server.json` at the root. After the npm publish
 succeeds:
 
-1. Update `version` and `packages[0].version` in `server.json` to the new
-   version, and commit.
+1. Check that `version` and `packages[0].version` in `server.json` equal the
+   new version (step 2 above). If not, fix them and commit.
 2. Publish:
 
    ```

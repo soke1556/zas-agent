@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-09-28
+
+### Added
+
+- Transfer telemetry. File and note sends, item downloads, and Directo sends
+  and receives (live and reliable delivery) report `transfer.started`,
+  `transfer.stage_started`, `transfer.slow` (after 30 s),
+  `transfer.phase_timing` and `transfer.finished`. Each report carries the
+  item category, the transport, byte counts, a size bucket, stage durations and
+  the outcome (success, failure or cancellation), joined by a random
+  per-attempt ID. No file name, content, path or channel name. The same
+  opt-out as `agent.tool_call` covers it. The telemetry notice names the new
+  fields.
+
+- `plan_inactive`. A send, replace or Directo transfer in an organization
+  channel whose plan is inactive now says so, and names who can reactivate
+  it. It used to arrive as `upload_failed`, which told the agent to retry.
+
+### Changed
+
+- Reports never delay or fail a tool call. The `agent.tool_call` report is
+  sent after the answer, on a later tick. Transfer events are queued, at most
+  32 per batch, and sent in one request on a later tick. A report is one
+  request with a 2 s timeout and no retry. It is skipped when there is no
+  valid session, so it never starts or refreshes a sign-in.
+
 ## [0.9.0] - 2026-09-09
 
 ### Added
@@ -333,7 +359,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   two separate identities that cannot read each other's keys.
 - Install snippets for Claude Code and Codex, printed by `zas-agent pair`.
 
-[Unreleased]: https://github.com/soke1556/zas-agent/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/soke1556/zas-agent/compare/v0.10.0...HEAD
+[0.10.0]: https://github.com/soke1556/zas-agent/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/soke1556/zas-agent/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/soke1556/zas-agent/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/soke1556/zas-agent/compare/v0.6.3...v0.7.0

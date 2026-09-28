@@ -159,8 +159,13 @@ The package refuses some of these on its own, before a request is made. The
 ones marked *(server-side)* are enforced by the Zas server.
 
 - **No channel you did not grant.** Not by name, not by id.
-- **No shared channel you merely joined, and no workspace channel.** Grants
-  exist only on channels your account owns and that no organization manages
+- **No shared channel you joined, unless its owner allows it.** You can grant
+  a channel you joined, but the grant stays `grant_pending` until that
+  channel's owner allows this agent in Zas. The plan also caps how many of
+  these channels one agent holds: 2 on Free *(server-side)*.
+- **No workspace channel, unless the organization allows agents.** A channel
+  an organization manages, or one you created inside its workspace, can be
+  granted only while the organization is active and an admin turned agents on
   *(server-side)*.
 - **No reading unless the grant says so.** `read` is a separate switch from
   `send`; without it, `zas_list_items` and `zas_get_item` are refused.
@@ -200,6 +205,7 @@ string ever reaches a terminal.
 | `agent_revoked` | The owner revoked this agent. |
 | `agent_forbidden` | Only the account owner can do that. |
 | `grant_missing` | This agent has no access to that channel. |
+| `grant_pending` | That channel belongs to somebody else, and its owner has not allowed this agent yet. |
 | `send_forbidden` | This agent cannot send to that channel. |
 | `read_forbidden` | This agent cannot read that channel. |
 | `direct_mode` | That channel is in Directo mode. |
@@ -215,6 +221,7 @@ string ever reaches a terminal.
 | `fallback_unavailable` | Reliable delivery is not available right now. |
 | `key_stale` | The channel key changed; the owner refreshes it by opening Zas. |
 | `quota_exceeded` | The account reached its storage limit. |
+| `plan_inactive` | The organization's plan is inactive, so sending to its channels is paused; the owner or a billing admin reactivates it. |
 | `rate_limited` | Too many sends in a row. |
 | `file_too_big` | The file is over the plan limit. |
 | `duplicate` | That item is already in the channel. |
@@ -228,6 +235,12 @@ string ever reaches a terminal.
 | `write_failed` | The download destination could not be written. |
 | `pairing_expired` | The pairing expired; pair again. |
 | `pairing_cancelled` | The owner cancelled the pairing. |
+| `claim_mismatch` | The code does not match. |
+| `pairing_not_approved` | Nobody has approved this pairing yet. |
+| `pairing_claimed` | This pairing was already claimed; pair again. |
+| `agent_limit` | The account cannot take another agent; the owner deletes one from Settings → Agents. |
+| `grant_limit` | The plan allows fewer channels per agent than this pairing grants. |
+| `foreign_limit` | The plan allows this agent fewer channels of other people than this pairing asks for. |
 | `feature_disabled` | Agents are not enabled for this account yet. |
 | `upload_failed` | The upload failed. |
 | `oprf_failed` | Zas did not answer correctly while preparing the file. |
