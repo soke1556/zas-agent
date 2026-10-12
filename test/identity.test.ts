@@ -84,7 +84,9 @@ describe('identity files', () => {
       expect(stored.secret_ref.backend).toBe('dpapi');
       const encrypted = readFileSync(join(dir, `secret-${stored.secret_ref.id}.json`), 'utf8');
       expect(Buffer.from(encrypted, 'base64').includes(Buffer.from(identity.p256_private))).toBe(false);
-      const aclCheck = "$p=[Console]::In.ReadToEnd(); $a=Get-Acl -LiteralPath $p; $sid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value; "
+      // Use .NET directly: pwsh parents can pass a PSModulePath that prevents
+      // Windows PowerShell from importing the module that contains Get-Acl.
+      const aclCheck = "$ErrorActionPreference='Stop'; $p=[Console]::In.ReadToEnd(); $a=[IO.Directory]::GetAccessControl($p); $sid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value; "
         + "$rules=@($a.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier])); "
         + "[Console]::Out.Write(($a.AreAccessRulesProtected -and $rules.Count -eq 1 -and $rules[0].IdentityReference.Value -eq $sid))";
       expect(execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', aclCheck],

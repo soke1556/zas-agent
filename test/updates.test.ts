@@ -9,6 +9,9 @@ import { checkForUpdate, isReleaseInstall, launchStaged, newerRelease, npmComman
   setUpdates, stagedRelease, startUpdateChecks, updateLine, updatesEnabled, verifiedStagedRelease,
   type UpdateDeps } from '../src/updates.js';
 
+// Native PowerShell startup can exceed five seconds on a cold hosted runner.
+vi.setConfig({ testTimeout: 20_000 });
+
 let home: string;
 beforeEach(() => {
   home = mkdtempSync(join(tmpdir(), 'zas-updates-'));
