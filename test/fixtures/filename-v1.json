@@ -1,0 +1,62 @@
+[
+  {
+    "raw": "../../a.txt",
+    "fallback": "file",
+    "expected": "a.txt"
+  },
+  {
+    "raw": "..\\..\\a.txt",
+    "fallback": "file",
+    "expected": "a.txt"
+  },
+  {
+    "raw": "..",
+    "fallback": "file",
+    "expected": "file"
+  },
+  {
+    "raw": "",
+    "fallback": "file",
+    "expected": "file"
+  },
+  {
+    "raw": "CON.txt",
+    "fallback": "file",
+    "expected": "_CON.txt"
+  },
+  {
+    "raw": "a:b*c.txt",
+    "fallback": "file",
+    "expected": "a_b_c.txt"
+  },
+  {
+    "raw": ".hidden",
+    "fallback": "file",
+    "expected": "hidden"
+  },
+  {
+    "raw": "name. ",
+    "fallback": "file",
+    "expected": "name"
+  },
+  {
+    "raw": "console.txt",
+    "fallback": "file",
+    "expected": "console.txt"
+  },
+  {
+    "raw": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.pdf",
+    "fallback": "file",
+    "expected": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.pdf"
+  },
+  {
+    "raw": "bad\\\u0000name.txt",
+    "fallback": "file",
+    "expected": "_name.txt"
+  },
+  {
+    "raw": "ok.pdf",
+    "fallback": "file",
+    "expected": "ok.pdf"
+  }
+]

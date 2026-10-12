@@ -16,7 +16,7 @@ import { editItem, replaceFile } from './edit.js';
 import { humanSentence, ZasError } from './errors.js';
 import { receiveDirect, receiveDirectFallback, type FailedReceive, type ReceiveDeps } from './receive.js';
 import { channelNameOf, grantsFor } from './grants.js';
-import { defaultEndpoints, loadIdentity, type Identity, type RemoteGrant } from './identity.js';
+import { defaultEndpoints, loadIdentity, secretStorage, type Identity, type RemoteGrant } from './identity.js';
 import { JobRunner } from './jobs.js';
 import { openInBrowser } from './open.js';
 import { runPair } from './pair.js';
@@ -24,6 +24,7 @@ import { getItem, listItems } from './read.js';
 import { sendFile, sendNote, type SendContext } from './send.js';
 import { kindForProfile, packageName } from './snippets.js';
 import { report, telemetryLine, toolCallProperties } from './telemetry.js';
+import { updateLine } from './updates.js';
 
 export interface ServerDeps {
   identity?: Identity;
@@ -234,6 +235,8 @@ ${formatDirectDiagLines(job.diag).join('\n')}`) };
       });
       return text([
         `Paired as “${c.identity.name}” (${c.identity.kind}) with account ${c.identity.owner_uid}.`,
+        `Secret storage: ${secretStorage(profile)}.`,
+        updateLine(agentVersion()),
         grants.length > 0 ? 'Channels:' : 'No channels: the owner has not granted access to any yet.',
         ...lines,
         `${packageName()} ${agentVersion()} · profile ${profile}`,

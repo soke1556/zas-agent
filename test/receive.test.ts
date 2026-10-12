@@ -231,6 +231,18 @@ describe('receiveDirect', () => {
     expect(readdirSync(dest).sort()).toEqual(['nota (1).txt', 'nota.txt']);
   });
 
+  it('sanitizes Directo peer names and preserves a competing file created during flight', async () => {
+    const meta = { ...offered, name: '..\\..\\a:b.txt' };
+    const wire = fakeWire({ offers: [[offerRow({ metaEnc: seal(meta) })]] });
+    const target = join(dest, 'a_b.txt');
+    const result = await receiveDirect(ctxOf(wire.client), { channel: 'ch1', dest }, (phase) => {
+      if (phase === 'flight') writeFileSync(target, 'keep this');
+    }, deps({ engine: fakeEngine('done').engine }));
+    expect(result.path).toBe(join(dest, 'a_b (1).txt'));
+    expect(readFileSync(target, 'utf8')).toBe('keep this');
+    expect(new Uint8Array(readFileSync(result.path))).toEqual(payload);
+  });
+
   it('refuses without a read grant, and off Directo', async () => {
     for (const [over, code] of [
       [{ read: false }, 'read_forbidden'],

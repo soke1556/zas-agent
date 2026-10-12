@@ -112,6 +112,40 @@ You can also start the flow from the coding agent with the `zas_pair` tool:
 the first call hands back the URL, a later call says whether the approval
 landed, and if the page shows a code, a call with `code` claims with it.
 
+## Updates
+
+Automatic updates are on by default in published installations. While serving,
+the agent checks npm's `latest` stable release in the background, at most once
+per day. It installs newer releases in a separate directory and verifies that
+the installed executable reports the expected version. The next agent launch
+uses that release. Restart the MCP connection (or your coding agent) to apply it;
+running transfers are never restarted by the updater. Pairing and channel grants
+stay in place, and an offline or failed update leaves the current version usable.
+
+```sh
+zas-agent updates       # show the setting and any release ready to use
+zas-agent updates off   # disable automatic downloads and staged launch selection
+zas-agent updates on    # enable them again
+zas-agent update        # check and stage a release now
+```
+
+Use `npx -y zas-agent@latest` in place of `zas-agent` if you have no global
+installation. `zas_status` also reports the running version and staged update.
+`ZAS_AGENT_AUTO_UPDATE=0` disables the built-in updater; `1` enables it, overriding
+the saved setting. An explicit `update` command can still download a release while
+updates are off, but it will not be selected until updates are enabled again.
+For a pinned installation, use an exact version in the launch command and disable
+automatic updates. The documented `npx ...@latest` command still asks npm for the
+latest package even when the built-in updater is off.
+
+Updates require npm and install the official `zas-agent` package from
+`https://registry.npmjs.org`, including its normal dependency installation scripts
+and npm integrity checks. No administrator access is needed. Staged packages live
+under `~/.zas/agent/.updates` (or `ZAS_AGENT_HOME/.updates`); old installations are
+retained and can be removed with the agent stopped. Source checkouts and prerelease
+builds do not update themselves. Existing installations need to upgrade once to a
+release containing this updater before these controls are available.
+
 ## Why you can trust it
 
 Every line here is a fact. The ones about this package you can check in this
@@ -201,6 +235,11 @@ string ever reaches a terminal.
 | Code | What it means |
 | --- | --- |
 | `not_paired` | This agent is not paired yet. |
+| `unsafe_endpoint` | An endpoint or emulator configuration could expose credentials. |
+| `identity_permissions` | A secret file is not private to its owner. |
+| `secret_store_failed` | The OS secret store cannot save or open this profile. |
+| `invalid_voprf_configuration` | The server-selected encryption key has no valid local pin. |
+| `invalid_voprf_proof` | The encryption service response failed verification. |
 | `identity_corrupt` | The identity file on disk is damaged. |
 | `agent_revoked` | The owner revoked this agent. |
 | `agent_forbidden` | Only the account owner can do that. |
@@ -344,8 +383,8 @@ Codex agent side by side without either reading the other's keys:
 | macOS, Linux | `~/.zas/agent/<profile>/` |
 | Windows | `%USERPROFILE%\.zas\agent\<profile>\` |
 
-Four files in the profile directory, all written through a temporary file and
-renamed into place, so a crash mid-write cannot leave half a file behind:
+Profile metadata is written through temporary files and renamed into place,
+so a crash mid-write cannot leave half a file behind:
 
 - `identity.json` — the agent uid, the owner uid, the name, and the two key
   pairs. Back it up like a private key, or delete it and pair again.
@@ -364,11 +403,24 @@ One more file sits next to the profiles, in `~/.zas/agent/`:
   above was last printed. It belongs to the machine, not to a profile, so one
   decision covers every agent on it.
 
-On macOS and Linux the directory is created `0700` and every file `0600`. On
-Windows those bits have no effect: the files carry the permissions of the user
-profile they live in, and the package does not try to set any others.
+Private keys, polling secrets and legacy pairing codes migrate out of the old
+JSON files on the next start. The replacement metadata is committed only after
+storage succeeds. Windows uses current-user DPAPI and an owner-only directory
+ACL without inherited grants. macOS uses Keychain; Linux uses Secret Service
+through `secret-tool` when a desktop session and that tool are available. A
+locked or failing desktop store must be unlocked or repaired before retrying.
+Headless Linux uses a `0600` file in a `0700` directory. POSIX secret reads reject
+files owned by another user, symlinks, hard links, and group/world permissions;
+the error includes the `chmod 600` repair command. `zas_status` reports the store.
 
-Deleting the directory makes this machine forget the agent. It does not revoke
+Older agent versions cannot read the migrated secret references; keep the
+updated agent installed after migration. OS-protected profiles are not portable backups. Pair a new profile on another
+machine; do not copy its JSON files and expect them to sign in. OS protection
+does not prevent a process already running as your user from using your keys.
+
+Deleting the directory removes the local references. Keychain/Secret Service
+entries may remain under service `red.zas.agent`; remove those with the OS
+credential manager when discarding a profile. It does not revoke
 anything: the account side is closed from the web app, under
 Settings → Agents → Revoke.
 
@@ -401,11 +453,21 @@ agent: same keys, same channels, one row.
 | `ZAS_TOKEN_BASE` | `https://zas.red/anon-token` | The challenge and token routes. |
 | `ZAS_OPRF_BASE` | `https://zas.red/oprf` | The blind key-derivation service. |
 | `ZAS_FIREBASE_PROJECT` | `zas-me` | The project whose Firestore the read path queries. |
+| `ZAS_ALLOW_INSECURE_DEV` | unset | `1` permits HTTP only on `localhost`, `127.0.0.1`, or `::1`. |
+| `ZAS_VOPRF_PUBLIC_KEYS` | unset | Operator-provided JSON mapping key IDs to pinned base64 VOPRF public keys. Required when the server selects mode 1. |
 | `ZAS_FIREBASE_API_KEY` | the public web key | The key used to exchange a custom token for a session. |
 
 Only `--profile`, `ZAS_AGENT_HOME` and the two telemetry switches are worth
 setting by hand. The rest exist
 so the package can be pointed at a test deployment.
+
+Saved API/token/OPRF bases are validated on every load. Non-loopback HTTP is
+refused even with the dev flag. To run Firebase emulators, set both
+`FIREBASE_AUTH_EMULATOR_HOST` and `FIRESTORE_EMULATOR_HOST` to loopback hosts,
+all three Zas service bases to loopback, `ZAS_FIREBASE_PROJECT` to a `demo-*`
+project, and `ZAS_ALLOW_INSECURE_DEV=1`. Production profiles cannot use these
+emulators. Credential-bearing requests refuse redirects. Use a separate
+profile for development; repair unsafe saved bases before loading an old one.
 
 ## Development
 
@@ -422,7 +484,7 @@ node dist/cli.js --version
 This repository is the public mirror of the `agent/` package of Zas's private
 monorepo. It is produced by `scripts/export-public.mjs`, which builds the
 package with esbuild and uses the build's own metafile to decide what to copy:
-`src/`, `test/`, the package files, and the nine `src/shared/*` modules the
+`src/`, `test/`, the package files, and the `src/shared/*` modules the
 agent imports. Those shared modules are the client-side crypto and format code — the
 chunker, the manifest, the envelope, the key derivation — that the Zas web app
 also ships, which is why the encryption the agent performs is the encryption the
@@ -431,6 +493,19 @@ app performs. The Zas server is not open source.
 Pull requests are welcome against this repository. The maintainer applies
 accepted changes back into the monorepo, and the next export brings them here.
 See [CONTRIBUTING.md](CONTRIBUTING.md).
+
+`shared-source.json` pins the shared modules and interoperability fixtures to
+zas.web commit `46d727a870c64728b42b768950d55d7d7a575181`. CI runs
+`npm run check:shared` to detect drift using upstream Git blob IDs. Maintainers
+with the private checkout can verify the pin against the actual commit with
+`npm run check:shared -- --source ../zas.web`. Apply these agent changes back
+to the monorepo before the next export.
+
+This release follows the web reader phase: legacy/v1 and authenticated v2
+envelopes can be read; application writers still produce v1. VOPRF mode is
+selected by `GET /v1/agents/me`; mode 1 requires a local public-key pin and a
+valid batch proof, with no downgrade on failure. Enabling production v2 writes
+and coordinating VOPRF adoption across clients remain separate rollout work.
 
 ## Security
 

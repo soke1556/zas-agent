@@ -4,6 +4,8 @@ import { ZasError } from '../src/errors.js';
 import { newKeyMaterial, defaultEndpoints, type Identity } from '../src/identity.js';
 import { verifyAgentChallenge } from '../src/shared/agent.js';
 import { b64ToBytes } from '../src/shared/hash.js';
+import { bytesToB64 } from '../src/shared/hash.js';
+import { voprfBlind, voprfEvaluate, voprfPublicKey } from '../src/shared/voprf.js';
 
 const keys = newKeyMaterial();
 const identity: Identity = { version: 1, agent_uid: 'agent_' + 'A'.repeat(22), owner_uid: 'owner-1', name: 'CC', kind: 'claude_code', host: 'box', ...keys, ...defaultEndpoints() };
@@ -40,6 +42,41 @@ function fakeFetch(log: string[], opts: { evaluate401?: 'once' | 'always' } = {}
 }
 
 describe('ZasClient', () => {
+  it('gets the selected mode from its allowed agent route and requires a local pin', async () => {
+    const wire = fakeFetch([]);
+    const paths: string[] = [];
+    const client = new ZasClient(identity, { now: wire.now, fetch: (async (url, init) => {
+      paths.push(String(url));
+      if (String(url).endsWith('/agents/me')) return new Response(JSON.stringify({ dedupe: { mode: 1, key_id: 'test' } }));
+      return wire.fetch(url, init);
+    }) as typeof fetch });
+    vi.stubEnv('ZAS_VOPRF_PUBLIC_KEYS', '{}');
+    try {
+      await expect(client.dedupePolicy()).rejects.toMatchObject({ code: 'invalid_voprf_configuration' });
+      const publicKey = voprfPublicKey(7n);
+      vi.stubEnv('ZAS_VOPRF_PUBLIC_KEYS', JSON.stringify({ test: bytesToB64(publicKey) }));
+      expect(await client.dedupePolicy()).toEqual({ mode: 1, keyId: 'test', publicKey });
+      expect(paths.some((path) => path.endsWith('/capabilities'))).toBe(false);
+    } finally { vi.unstubAllEnvs(); }
+  });
+  it('pins the VOPRF key and rejects a service-selected key without retrying in base mode', async () => {
+    const wire = fakeFetch([]);
+    let wrong = false;
+    const requests: Record<string, unknown>[] = [];
+    const client = new ZasClient(identity, { now: wire.now, fetch: (async (url, init) => {
+      if (!String(url).endsWith('/evaluate')) return wire.fetch(url, init);
+      const body = JSON.parse(String(init?.body)); requests.push(body);
+      const result = voprfEvaluate(wrong ? 8n : 7n, body.blinded.map(b64ToBytes));
+      return new Response(JSON.stringify({ mode: 1, key_id: 'test', evaluated: result.evaluated.map(bytesToB64), proof: bytesToB64(result.proof), public_key: bytesToB64(result.publicKey) }), { status: 200 });
+    }) as typeof fetch });
+    const policy = { mode: 1 as const, keyId: 'test', publicKey: voprfPublicKey(7n) };
+    const blinded = [bytesToB64(voprfBlind(new TextEncoder().encode('file')).blindedElement)];
+    expect(await client.oprfEvaluate(blinded, policy)).toHaveLength(1);
+    wrong = true;
+    await expect(client.oprfEvaluate(blinded, policy)).rejects.toMatchObject({ code: 'invalid_voprf_proof' });
+    expect(requests).toHaveLength(2);
+    expect(requests.every((request) => request.mode === 1 && request.key_id === 'test')).toBe(true);
+  });
   it('signs in with a valid challenge signature and reuses the token until it nears expiry', async () => {
     const log: string[] = [];
     const f = fakeFetch(log);

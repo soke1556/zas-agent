@@ -78,13 +78,13 @@ export function oprfBlind(input: Uint8Array): BlindResult {
 
 /** Server side: evaluatedElement = k * blindedElement */
 export function oprfEvaluate(serverKey: bigint, blindedElement: Uint8Array): Uint8Array {
-  const B = RistrettoPoint.fromHex(blindedElement);
+  const B = decodeOprfElement(blindedElement);
   return B.multiply(serverKey).toRawBytes();
 }
 
 /** Client side: unblind and hash to the final 64-byte OPRF output */
 export function oprfFinalize(input: Uint8Array, blind: bigint, evaluatedElement: Uint8Array): Uint8Array {
-  const E = RistrettoPoint.fromHex(evaluatedElement);
+  const E = decodeOprfElement(evaluatedElement);
   const N = E.multiply(invert(blind, ORDER));
   const unblinded = N.toRawBytes();
   const hashInput = concatBytes(
@@ -95,6 +95,18 @@ export function oprfFinalize(input: Uint8Array, blind: bigint, evaluatedElement:
     te.encode('Finalize'),
   );
   return sha512(hashInput);
+}
+
+/** RFC 9497 section 4.1: decoding a group element also rejects identity. */
+function decodeOprfElement(bytes: Uint8Array): InstanceType<typeof RistrettoPoint> {
+  try {
+    if (bytes.length !== 32) throw new Error();
+    const point = RistrettoPoint.fromHex(bytes);
+    if (point.equals(RistrettoPoint.ZERO)) throw new Error();
+    return point;
+  } catch {
+    throw new Error('invalid_oprf_element');
+  }
 }
 
 /** Derive a server key from 32 random seed bytes (stored as the OPRF secret). */

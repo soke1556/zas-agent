@@ -1,0 +1,23 @@
+{
+  "client_error": "invalid_oprf_element",
+  "server_status": 400,
+  "server_error": "invalid_element",
+  "vectors": [
+    {
+      "name": "identity",
+      "element_hex": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+      "name": "short",
+      "element_hex": "00000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+      "name": "long",
+      "element_hex": "000000000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+      "name": "noncanonical",
+      "element_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+    }
+  ]
+}

@@ -13,12 +13,13 @@ import { fileURLToPath } from 'node:url';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { isAgentKind, type AgentKind } from './shared/agent.js';
 import { humanSentence, ZasError } from './errors.js';
-import { defaultEndpoints, PROFILE_RE } from './identity.js';
+import { defaultEndpoints, loadIdentity, loadPending, PROFILE_RE } from './identity.js';
 import { openInBrowser } from './open.js';
 import { runPair } from './pair.js';
 import { agentVersion, buildServer } from './server.js';
 import { kindForProfile, packageName } from './snippets.js';
 import { markNoticeShown, noticeShown, setTelemetry, TELEMETRY_NOTICE, telemetryLine } from './telemetry.js';
+import { checkForUpdate, isReleaseInstall, launchStaged, setUpdates, verifiedStagedRelease, startUpdateChecks, updateLine } from './updates.js';
 
 /** What a bare `zas-agent` and a bare `zas-agent pair` mean. The install
  *  snippets always pass `--profile`, so this only decides for someone typing
@@ -27,10 +28,11 @@ import { markNoticeShown, noticeShown, setTelemetry, TELEMETRY_NOTICE, telemetry
 const DEFAULT_PROFILE = 'claude-code';
 
 interface Parsed {
-  command: 'serve' | 'pair' | 'telemetry' | 'version' | 'help' | 'invalid';
+  command: 'serve' | 'pair' | 'telemetry' | 'updates' | 'update' | 'version' | 'help' | 'invalid';
   profile: string;
   /** `telemetry on` and `telemetry off`. Absent means "say what it is now". */
   telemetry?: 'on' | 'off';
+  updates?: 'on' | 'off';
   kind?: AgentKind;
   host?: string;
   unknown?: string;
@@ -50,6 +52,15 @@ export function parseArgs(argv: string[]): Parsed {
     const inline = arg.startsWith('--') && eq > 0 ? arg.slice(eq + 1) : undefined;
     const take = (): string => (inline !== undefined ? inline : (argv[++i] ?? ''));
     if (name === 'pair') parsed.command = 'pair';
+    else if (name === 'update') parsed.command = 'update';
+    else if (name === 'updates') {
+      parsed.command = 'updates';
+      const next = argv[i + 1];
+      if (next === 'on' || next === 'off') { parsed.updates = next; i++; }
+      else if (next !== undefined && !next.startsWith('--')) {
+        return { ...parsed, command: 'invalid', message: `Unknown update setting "${next}". Use "on" or "off".` };
+      }
+    }
     else if (name === 'telemetry') {
       parsed.command = 'telemetry';
       // The word after it is the setting, and only if it is one: `telemetry
@@ -91,6 +102,8 @@ const USAGE = [
   '  zas-agent pair [--profile <name>]           pair this agent with a Zas account',
   '                 [--kind claude_code|codex|other] [--host <name>] [--no-open]',
   '  zas-agent telemetry [on|off]                say what this machine reports, or change it',
+  '  zas-agent updates [on|off]                  show or change automatic updates',
+  '  zas-agent update                            stage the latest release for the next launch',
   '  zas-agent --version',
 ].join('\n');
 
@@ -142,6 +155,34 @@ export async function main(argv: string[], log: (line: string) => void = (l) => 
     return 0;
   }
 
+  if (args.command === 'updates') {
+    if (args.updates) setUpdates(args.updates === 'on');
+    log(updateLine(agentVersion()));
+    log('Updates take effect on the next launch. Active transfers keep running.');
+    return 0;
+  }
+
+  const released = isReleaseInstall(agentVersion(), import.meta.url);
+  if (args.command === 'update') {
+    if (!released) { log('Development checkouts do not update themselves.'); return 0; }
+    try { log(await checkForUpdate(agentVersion(), true)); return 0; }
+    catch { log('Update failed. The current agent is unchanged; check your network and npm installation, then retry.'); return 1; }
+  }
+
+  if (released) {
+    const ready = await verifiedStagedRelease(agentVersion());
+    if (ready) return launchStaged(ready.entry, argv);
+  }
+
+  try {
+    defaultEndpoints();
+    loadIdentity(args.profile);
+    loadPending(args.profile);
+  } catch (error) {
+    log(humanSentence(error instanceof ZasError ? error : new ZasError('internal', 0)));
+    return 1;
+  }
+
   if (args.command === 'pair') {
     // Before the first request of the flow, and before a browser opens: a
     // person is at this terminal now, which is the only moment the notice is
@@ -188,7 +229,13 @@ export async function main(argv: string[], log: (line: string) => void = (l) => 
   }
 
   noticeOnServe(log);
-  await buildServer(args.profile).connect(new StdioServerTransport());
+  const transport = new StdioServerTransport();
+  await buildServer(args.profile).connect(transport);
+  if (released) {
+    const stop = startUpdateChecks(agentVersion(), log);
+    const onclose = transport.onclose;
+    transport.onclose = () => { stop(); onclose?.(); };
+  }
   // The transport owns the process from here: it holds stdin open, and the
   // client closing it is what ends the run.
   return 0;

@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Automatic npm release checks and separately staged updates, enabled by default.
+  Verified releases take effect on the next launch without interrupting transfers
+  or changing pairing data. Add `update`, `updates [on|off]`, the
+  `ZAS_AGENT_AUTO_UPDATE` override, and update information in `zas_status`.
+  Source checkouts stay on their working code; offline or failed checks keep the
+  current agent running.
+
+### Security
+
+- Sanitize local filenames with the pinned web rules, enforce containment, and
+  publish downloads and Directo receives without overwriting competing files (#13).
+- Migrate private keys and pairing secrets to Windows DPAPI, macOS Keychain or
+  Linux Secret Service, with an owner-only headless fallback. Check POSIX secret
+  permissions and report the storage backend in status (#14).
+- Refuse unsafe HTTP bases and emulator credential mixing, revalidate saved
+  endpoints, and reject redirects on credential-bearing requests (#15).
+- Update compatible production dependencies to pass the high-severity audit.
+- Mirror zas.web `46d727a` shared codecs and vectors: reject invalid OPRF points,
+  read v2 envelopes while retaining v1 writes, and verify server-selected VOPRF
+  against configured public-key pins. CI checks pinned shared sources (#16).
+
 ## [0.10.0] - 2026-09-28
 
 ### Added

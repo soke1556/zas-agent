@@ -412,7 +412,7 @@ describe('read', () => {
     expect(new Uint8Array(readFileSync(second.path!))).toEqual(data);
   });
 
-  it('closes the file and clears the temporary when the rename fails', async () => {
+  it('closes the file and clears the temporary when every publish name is occupied', async () => {
     const data = new TextEncoder().encode('escrito, nunca renombrado');
     const { manifest, blobs } = await fileItem(data);
     const server = fakeServer({
@@ -421,17 +421,15 @@ describe('read', () => {
     const landing = join(dir, 'aterrizaje');
     mkdirSync(landing);
     const target = join(landing, 'bajado.txt');
-    // The one failure the others cannot reach: everything worked until the last
-    // syscall, so the fd was open and the temporary already holds plaintext.
-    // The name is chosen before the first chunk is fetched, so a directory grown
-    // at it while the download runs is what a destination replaced under the
-    // agent's feet looks like — and `renameSync` onto a directory refuses
-    // (EPERM on Windows, EISDIR elsewhere). `vi.spyOn(fs, 'renameSync')` cannot
-    // do this: vitest cannot redefine an ESM namespace export of `node:fs`.
+    // Fill every candidate after destination selection, while bytes are in
+    // flight. Publication must fail without touching any competing entry.
     const fetcher = fakeFetch({ blobs });
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       const answer = await fetcher.impl(input, init);
-      if (!existsSync(target)) mkdirSync(target);
+      if (!existsSync(target)) {
+        mkdirSync(target);
+        for (let n = 1; n <= 100; n++) mkdirSync(join(landing, `bajado (${n}).txt`));
+      }
       return answer;
     }));
 

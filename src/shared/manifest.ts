@@ -98,10 +98,29 @@ export function newManifest(partial: Omit<Manifest, 'v' | 'chunker'>): Manifest 
 // falls back — which `openSealed` does automatically.
 const ENVELOPE_MAGIC = 0x5a; // 'Z'
 export const KEY_VERSION_LEGACY = 1;
+// Reserved generation zero plus a long discriminator avoids confusing v2
+// with any versioned v1 envelope (especially key generation 2).
+const ENVELOPE_V2_PREFIX = new Uint8Array([0x5a, 0, 0x5a, 0x41, 0x53, 0x45, 0x4e, 0x56]);
+const V2_HEADER_BYTES = 8 + 1 + 1 + 24;
+function isV2Envelope(sealed: Uint8Array): boolean {
+  return ENVELOPE_V2_PREFIX.every((b, i) => sealed[i] === b);
+}
+function validateV2Envelope(sealed: Uint8Array): void {
+  if (sealed.length < V2_HEADER_BYTES + 16 || sealed[8] !== 2 || sealed[9] < 1) throw new Error('invalid_envelope');
+}
+
+/** Reader-first rollout: existing writers stay v1; explicit v2 for vectors/opt-in. */
+export function sealRawV2(key: Uint8Array, version: number, plain: Uint8Array): Uint8Array {
+  if (!Number.isInteger(version) || version < 1 || version > 255) throw new Error('key version out of range');
+  const nonce = crypto.getRandomValues(new Uint8Array(24));
+  const header = concatBytes(ENVELOPE_V2_PREFIX, new Uint8Array([2, version]), nonce);
+  return concatBytes(header, xchacha20poly1305(key, nonce, header).encrypt(plain));
+}
 
 /** Which key generation sealed these bytes. Readable without any key, which is
  *  the whole point — the client uses it to fetch the right one. */
 export function envelopeVersion(sealed: Uint8Array): number {
+  if (isV2Envelope(sealed)) { validateV2Envelope(sealed); return sealed[9]; }
   if (sealed.length > 26 && sealed[0] === ENVELOPE_MAGIC && sealed[1] >= 1) return sealed[1];
   return KEY_VERSION_LEGACY;
 }
@@ -115,6 +134,11 @@ function sealBytes(key: Uint8Array, version: number, plain: Uint8Array): Uint8Ar
 }
 
 function openSealed(key: Uint8Array, sealed: Uint8Array): Uint8Array {
+  if (isV2Envelope(sealed)) {
+    validateV2Envelope(sealed);
+    // Authentication failure here is final: never retry a legacy layout.
+    return xchacha20poly1305(key, sealed.slice(10, V2_HEADER_BYTES), sealed.slice(0, V2_HEADER_BYTES)).decrypt(sealed.slice(V2_HEADER_BYTES));
+  }
   const versioned = envelopeVersion(sealed) !== KEY_VERSION_LEGACY || sealed[0] === ENVELOPE_MAGIC;
   if (versioned && sealed.length > 26) {
     try {

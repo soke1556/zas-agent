@@ -74,6 +74,9 @@ export function errorFromResponse(status: number, body: unknown): ZasError {
 // where a stack trace would say nothing about what the owner has to do.
 // `{path}` is filled from the error's message.
 const SENTENCES: Record<string, string> = {
+  unsafe_endpoint: 'Unsafe endpoint configuration ({path}). Use HTTPS; local emulators require ZAS_ALLOW_INSECURE_DEV=1 and an isolated demo-* project with all services on loopback.',
+  identity_permissions: 'The secret file is not private: {path}. Restrict it to its owner before retrying.',
+  secret_store_failed: 'The OS secret store could not open or save this profile. Unlock the store, or pair again in a new profile on this machine.',
   identity_corrupt: 'The agent identity file is damaged: {path}. Restore it, or delete it and pair again.',
   not_paired: 'This agent is not paired yet. Run “npx -y zas-agent pair” in the terminal.',
   internal: 'Something failed inside the agent. Try again.',
@@ -119,6 +122,8 @@ const SENTENCES: Record<string, string> = {
   feature_disabled: 'Agents are not enabled for this account yet.',
   upload_failed: 'The upload failed. Try again.',
   oprf_failed: 'Zas did not answer correctly while preparing the file. Try again.',
+  invalid_voprf_proof: 'Zas could not verify the encryption service response. The file was not sent. Try again later.',
+  invalid_voprf_configuration: 'The encryption service key is not configured for this agent. Update the agent configuration before sending.',
   network: 'Zas cannot be reached. Try again in a moment.',
   sign_in_failed: 'Zas did not accept this agent session. Try again, or pair again.',
   bad_signature: "Zas rejected this agent's signature. Pair it again.",

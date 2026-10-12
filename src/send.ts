@@ -17,7 +17,8 @@ import {
 } from './shared/hash.js';
 import { newManifest, sealManifest, type Manifest, type ManifestChunk } from './shared/manifest.js';
 import { encryptChunk, type EncryptedChunk } from './shared/mle.js';
-import { oprfBlind, oprfFinalize } from './shared/oprf.js';
+import { oprfFinalize } from './shared/oprf.js';
+import { blindDedupe } from './shared/dedupe-oprf.js';
 import type { ZasClient } from './client.js';
 import { ZasError } from './errors.js';
 import { channelKeyOf, channelNameOf, grantsFor, resolveChannel } from './grants.js';
@@ -491,7 +492,8 @@ export async function placeFile(
   const plains: Uint8Array[] = [];
   for await (const piece of chunkStream([bytes])) plains.push(piece);
   const hashes = await Promise.all(plains.map((p) => blake3Bytes(p)));
-  const blinds = hashes.map((h) => oprfBlind(h));
+  const policy = await ctx.client.dedupePolicy();
+  const blinds = hashes.map((h) => blindDedupe(h, policy));
   const evaluated: string[] = [];
   for (const slice of batches(blinds.map((b) => bytesToB64(b.blindedElement)), sliceSize(ctx))) {
     // In order, and concatenated in order: the i-th evaluation belongs to the
@@ -499,14 +501,17 @@ export async function placeFile(
     // slice is measured against its own request rather than the total, because
     // one short answer followed by one long one adds up correctly and pairs
     // every hash after it with the wrong evaluation.
-    const answers = await ctx.client.oprfEvaluate(slice);
+    const answers = await ctx.client.oprfEvaluate(slice, policy);
     if (answers.length !== slice.length) throw new ZasError('oprf_failed', 0);
     for (const one of answers) evaluated.push(one);
   }
 
   onPhase?.('encrypting');
+  let outputs: Uint8Array[];
+  try { outputs = hashes.map((hash, i) => oprfFinalize(hash, blinds[i].blind, b64ToBytes(evaluated[i]))); }
+  catch { throw new ZasError('oprf_failed', 0); }
   const encs = await Promise.all(plains.map(
-    (plain, i) => encryptChunk(oprfFinalize(hashes[i], blinds[i].blind, b64ToBytes(evaluated[i])), plain),
+    (plain, i) => encryptChunk(outputs[i], plain),
   ));
 
   onPhase?.('uploading');

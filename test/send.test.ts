@@ -169,7 +169,7 @@ function fakeServer(opts: {
     return new Response(null, { status: 200 });
   });
 
-  const client = { identity, api, oprfEvaluate: vi.fn(async (blinded: string[]) => {
+  const client = { identity, api, dedupePolicy: vi.fn(async () => ({ mode: 0 as const })), oprfEvaluate: vi.fn(async (blinded: string[]) => {
     expect(blinded.length).toBeLessThanOrEqual(maxBatch);
     oprfCalls.push(blinded);
     const out = blinded.map((b) => bytesToB64(oprfEvaluateServer(SERVER_KEY, b64ToBytes(b))));

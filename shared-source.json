@@ -1,0 +1,29 @@
+{
+  "repository": "soke1556/zas.web",
+  "commit": "46d727a870c64728b42b768950d55d7d7a575181",
+  "files": {
+    "src/shared/agent-snippets.ts": "502fc3dcb24c3fe51cc45391940f75aec3763654",
+    "src/shared/agent.ts": "24464ab8f8b63b764e4b8b9ea7f88150e6c42676",
+    "src/shared/chunker.ts": "7333d0acc5df130c887a0996f74702e73a2dc6f5",
+    "src/shared/constants.ts": "4a7df3497a5e0560b85d3466392b8e8f9fd127ed",
+    "src/shared/dedupe-oprf.ts": "ae958b3c1c3d3279315300a7395bc14156baf72e",
+    "src/shared/direct-engine.ts": "a8e15cb14ce66b5f403689533afdd910b603d2ec",
+    "src/shared/direct-fallback.ts": "94a766795ff763574f907813f2ba8c9ae0e804bb",
+    "src/shared/direct-protocol.ts": "9ec452dd21d8805de30efc97020e40e06c2a3029",
+    "src/shared/direct.ts": "43a65956b1018611ba89e5dd21e3bee402888b71",
+    "src/shared/filename.ts": "f7c2107b8af7f2b8186db5df824ac295d2984d26",
+    "src/shared/hash.ts": "fccc0bd675083861f01fe86aab7b1532e69d73e4",
+    "src/shared/keys.ts": "f8faeb49482c514395438ad21cce0763adce3a28",
+    "src/shared/manifest.ts": "90445315b539d6a81e3de5e1606badfdec6e15e8",
+    "src/shared/mle.ts": "4b63a77522af39557cbb891982666b414c5af4aa",
+    "src/shared/oprf.ts": "9e471ca7adc12923dd01d7e1d758146ca1f34014",
+    "src/shared/product-analytics.ts": "1c9aa47f8ea50485cfda8629409849ac1fbd8d90",
+    "src/shared/sharedchannel.ts": "f222735389bab6e5b5a4ad6658cb95fbc6708587",
+    "src/shared/voprf.ts": "e04c6818e9ba462fdb004baa171d445dec9aa869",
+    "test/fixtures/filename-v1.json": "878c22325f77c4599d1c0aeb3edc4d883d29c44d",
+    "test/fixtures/oprf-invalid-elements.json": "4517be3ac447aa49f60af64f0eae1eea693b121b",
+    "test/fixtures/security-protocol-v2.json": "8c69abf541ac19ce63093b9b1c931194af5b8554",
+    "test/fixtures/voprf-rfc9497.json": "3867b20cbc1d4c0b48571602bd82617ece63a2dc",
+    "src/shared/nearby.ts": "9268c31ed9fed8a8b5e6cc2736336ae0c7453524"
+  }
+}

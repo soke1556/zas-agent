@@ -19,7 +19,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest, windows-latest, macos-latest]
         node: [20, 22]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -33,11 +33,15 @@ jobs:
 
       - run: npm ci
 
+      - run: npm run check:shared
+
       - run: npm run typecheck
 
       - run: npm test
 
       - run: npm run build
+
+      - run: npm run check:updates
 
       # The bundle carries its version from package.json through an esbuild
       # define. If the two ever disagree, `--version` lies about what is

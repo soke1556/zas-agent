@@ -13,8 +13,8 @@ export async function blake3Hex(data: Uint8Array): Promise<string> {
   return blake3(data, 256);
 }
 
-export function hkdf512(ikm: Uint8Array, info: string, length: number): Uint8Array {
-  return hkdf(sha512, ikm, undefined, new TextEncoder().encode(info), length);
+export function hkdf512(ikm: Uint8Array, info: string | Uint8Array, length: number): Uint8Array {
+  return hkdf(sha512, ikm, undefined, typeof info === 'string' ? new TextEncoder().encode(info) : info, length);
 }
 
 export function hmacSha256(key: Uint8Array, data: Uint8Array): Uint8Array {

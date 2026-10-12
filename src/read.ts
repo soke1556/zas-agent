@@ -7,11 +7,12 @@ import { TransferTelemetry, itemKind } from './transfer-telemetry.js';
 // and refused again by the security rules if it is revoked mid-listing.
 import { randomBytes } from 'node:crypto';
 import {
-  closeSync, existsSync, mkdirSync, mkdtempSync, openSync, renameSync, rmdirSync, statSync, unlinkSync,
+  closeSync, existsSync, mkdirSync, openSync, rmdirSync, statSync, unlinkSync,
   writeSync,
 } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { dirname, extname, join } from 'node:path';
+import { dirname } from 'node:path';
+import { destinationOf, publishDownload } from './destination.js';
+export { destinationOf } from './destination.js';
 import { b64ToBytes } from './shared/hash.js';
 import {
   decryptChannelName, openManifest, type Manifest, type ManifestChunk,
@@ -29,12 +30,6 @@ import type { SendContext } from './send.js';
 const DEFAULT_LIMIT = 20;
 const MAX_LIMIT = 50;
 
-/** Where a download lands when the caller named no destination: a directory of
- *  its own, made fresh for the call. Under the system temp directory rather
- *  than the profile — these are the user's files, not the agent's state — and
- *  never a shared, predictable name, which on a multi-user machine would let
- *  someone else list what an agent fetched or plant a symlink under it. */
-const DOWNLOAD_PREFIX = 'zas-agent-';
 
 /** A Firestore auto-id is alphanumeric, and every id the agent ever sees came
  *  from one. Anything else is a caller mistake, and building a reference out of
@@ -49,10 +44,6 @@ const ID_SEGMENT = /^(?!__)[A-Za-z0-9_-]{1,128}$/;
  *  manifest another member sealed. */
 const MAX_CHUNKS = 8192;
 
-/** How many ` (n)` names a download tries before it gives up. A hundred copies
- *  of one file in one directory is a caller looping over a mistake, and the
- *  hundred-and-first is better refused than added to the pile. */
-const MAX_DUPLICATES = 100;
 
 export interface ItemSummary {
   id: string;
@@ -303,53 +294,6 @@ async function fetchChunk(ctx: SendContext, chunk: ManifestChunk): Promise<Uint8
   }
 }
 
-/** The file name, reduced to something that cannot leave the directory it is
- *  written into. `manifest.name` was chosen on another machine. */
-function safeName(name: unknown, fallback: string): string {
-  const base = (typeof name === 'string' ? name : '').split(/[\\/]/).pop() ?? '';
-  return base.replace(/^\.+/, '').trim() || fallback;
-}
-
-/** A name with nothing standing on it. `renameSync` replaces whatever is at the
- *  target, so a download is one keystroke away from destroying the caller's own
- *  file: `dest: "README.md"` from an agent sitting in a repository would report
- *  success over the wreckage. Instead the download steps aside — `informe
- *  (1).txt` — the way a browser's downloads folder taught everyone to read, and
- *  the caller is told in `{ path }` where the bytes actually went. */
-function freeName(target: string): string {
-  if (!existsSync(target)) return target;
-  const ext = extname(target);
-  const stem = target.slice(0, target.length - ext.length);
-  for (let n = 1; n <= MAX_DUPLICATES; n++) {
-    const candidate = `${stem} (${n})${ext}`;
-    if (!existsSync(candidate)) return candidate;
-  }
-  throw new ZasError('write_failed', 0, target);
-}
-
-/** The file the bytes are written to. A destination that is already a
- *  directory means "put it in here", which is the natural reading of
- *  `dest: "./downloads"` and the alternative to a rename that fails with
- *  EISDIR. With no destination at all, a private directory made for this one
- *  call: two downloads of the same file name never meet. `created` names that
- *  directory, and only that one, so a download that fails can take it away
- *  again instead of leaving an empty `zas-agent-*` behind per failure. */
-export function destinationOf(
-  dest: string | undefined,
-  name: unknown,
-  fallback: string,
-): { target: string; created?: string } {
-  const base = safeName(name, fallback);
-  if (dest === undefined) {
-    // The directory was made a moment ago and holds nothing, so `freeName` can
-    // only answer the name itself. It is asked anyway: one rule, one place.
-    const created = mkdtempSync(join(tmpdir(), DOWNLOAD_PREFIX));
-    return { target: freeName(join(created, base)), created };
-  }
-  const at = statSync(dest, { throwIfNoEntry: false })?.isDirectory() ? join(dest, base) : dest;
-  return { target: freeName(at) };
-}
-
 /** One item, opened: the grant it was read under, the channel key, the row
  *  and the manifest. What an edit needs before it writes. */
 export interface LoadedItem {
@@ -452,7 +396,7 @@ async function getItemMeasured(
     if (size > 0 && written !== size) throw new ZasError('not_found', 404);
     closeSync(fd);
     fd = undefined;
-    renameSync(tmp, target);
+    target = publishDownload(tmp, target);
   } catch (err) {
     // A refused cap, a rate limit, a short manifest: those already say what
     // happened. The filesystem is renamed — EISDIR, EPERM, ENOTDIR, EACCES,
@@ -473,7 +417,7 @@ async function getItemMeasured(
     throw new ZasError('network', 0, String((err as Error)?.message ?? err));
   } finally {
     if (fd !== undefined) try { closeSync(fd); } catch { /* already gone */ }
-    // After the rename the temporary is the target; after anything else it
+    // After publication the temporary link is gone; after anything else it
     // holds plaintext nobody asked to keep.
     if (tmp !== undefined && existsSync(tmp)) try { unlinkSync(tmp); } catch { /* nothing to undo */ }
     // And the directory this call made for a download that never landed in it.

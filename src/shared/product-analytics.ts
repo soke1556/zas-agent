@@ -7,9 +7,54 @@
  * filename, channel name, URL, or raw error message reaching analytics.
  */
 
+import { NEARBY_REFUSAL_CODES } from './nearby.js';
+
 export const POSTHOG_PROJECT_TOKEN = 'phc_kpUS3fv9Rhe9KJ5BcFt36mn5w7iyJHCfCfuuRaRutQw2';
 export const POSTHOG_INGEST_HOST = 'https://t.zas.red';
 export const POSTHOG_UI_HOST = 'https://us.posthog.com';
+
+/** The Nearby client events (#38), in flow order. Android `Analytics.Indicator`
+ *  and the iOS catalog hold the same 27 names; the release audit compares them. */
+export const NEARBY_CLIENT_EVENTS = [
+  'nearby.session_started',
+  'nearby.permission_result',
+  'nearby.bluetooth_enable_result',
+  'nearby.advertising',
+  'nearby.token_failed',
+  'nearby.connect_received',
+  'nearby.scan_summary',
+  'nearby.touch_detected',
+  'nearby.touch_ambiguous',
+  'nearby.candidate_picked',
+  'nearby.carrier_read',
+  'nearby.resolved',
+  'nearby.face_shown',
+  'nearby.confirm_result',
+  'nearby.offer_sent',
+  'nearby.item_copied',
+  'nearby.offer_shown',
+  'nearby.offer_answered',
+  'nearby.answer_seen',
+  'nearby.code_shown',
+  'nearby.link_opened',
+  'nearby.card_state',
+  'nearby.claim_sent',
+  'nearby.claim_decided',
+  'nearby.claim_answer',
+  'nearby.feedback',
+  'nearby.session_ended',
+] as const;
+export type NearbyClientEvent = (typeof NEARBY_CLIENT_EVENTS)[number];
+
+/** Why a Nearby flow stopped, beyond the server's refusal codes: the local
+ *  steps that fail before or after a call. */
+export const NEARBY_FAIL_CODES = [
+  ...NEARBY_REFUSAL_CODES,
+  'network', 'timeout', 'disconnected', 'no_service', 'bad_length', 'gatt_error',
+  'bt_off', 'bt_unauthorized', 'bt_unsupported', 'permission_denied',
+  'copy_failed', 'key_missing', 'expired', 'other',
+] as const;
+export type NearbyFailCode = (typeof NEARBY_FAIL_CODES)[number];
 
 export const PRODUCT_EVENTS = [
   'account_created',
@@ -97,12 +142,33 @@ export const PRODUCT_EVENTS = [
   'agent.tool_call',
   // The public pages, which until now reported nothing at all: `capture_pageview`
   // is off, so a visitor who read the enterprise page and left was invisible.
-  // These five are the funnel that ends at `enterprise.org_create`.
+  // These five are the funnel that ends at `enterprise.org_create`; the sixth
+  // says how much of the home trailer people watched.
   'marketing.page_viewed',
   'marketing.section_viewed',
   'marketing.scroll_depth',
   'marketing.cta_clicked',
   'marketing.language_switched',
+  'marketing.video_progress',
+  // Zas Nearby (#35). The server writes them; none carries a token, a code,
+  // a key or a name.
+  'nearby_token_registered',
+  'nearby_resolved',
+  'nearby_offer_sent',
+  'nearby_offer_accepted',
+  'nearby_offer_declined',
+  'nearby_offer_withdrawn',
+  'nearby_offer_expired',
+  'nearby_code_created',
+  'nearby_code_claimed',
+  'nearby_code_allowed',
+  'nearby_code_denied',
+  'nearby_code_expired',
+  'nearby_refused',
+  // Zas Nearby on the device (#38): what the server cannot see. Bluetooth, the
+  // touch detector, the reads, the choices on screen, the feedback and the
+  // timing. Web sends the QR half only; Android and iOS send all of them.
+  ...NEARBY_CLIENT_EVENTS,
 ] as const;
 
 export type ProductEvent = (typeof PRODUCT_EVENTS)[number];
@@ -120,6 +186,19 @@ export const SERVER_OWNED_PRODUCT_EVENTS = [
   'agent.edit',
   'agent.replace',
   'agent.tool_call',
+  'nearby_token_registered',
+  'nearby_resolved',
+  'nearby_offer_sent',
+  'nearby_offer_accepted',
+  'nearby_offer_declined',
+  'nearby_offer_withdrawn',
+  'nearby_offer_expired',
+  'nearby_code_created',
+  'nearby_code_claimed',
+  'nearby_code_allowed',
+  'nearby_code_denied',
+  'nearby_code_expired',
+  'nearby_refused',
 ] as const satisfies readonly ProductEvent[];
 
 export type ServerProductEvent = (typeof SERVER_OWNED_PRODUCT_EVENTS)[number];
@@ -133,7 +212,7 @@ export type AnalyticsScalar = string | number | boolean;
 export type AnalyticsProperties = Record<string, AnalyticsScalar>;
 
 type Rule =
-  | { type: 'transfer_id' }
+  | { type: 'uuid' }
   | { type: 'boolean' }
   | { type: 'number'; min?: number }
   | { type: 'string'; values: ReadonlySet<string> };
@@ -160,22 +239,22 @@ const pairHandoff = oneOf('loopback', 'manual', 'unknown');
 const marketingSurface = oneOf('home', 'plans', 'enterprise', 'app');
 
 /** A block of one of those pages. `enterprise_band` is the Enterprise section
- *  that closes the home page and `/plans`; the rest are sections of
- *  `/enterprise` itself, in the order the page puts them in. */
+ *  that closes the home page and `/plans`; `trailer` is the home video; the
+ *  rest are sections of `/enterprise` itself, in the order the page puts them in. */
 const marketingSection = oneOf(
-  'enterprise_band', 'hero', 'what', 'benefits', 'agents', 'fit', 'billing', 'signin',
+  'enterprise_band', 'hero', 'what', 'benefits', 'agents', 'fit', 'billing', 'signin', 'trailer',
 );
 
 /** Every link and button on those pages that leads somewhere we care about. */
 const marketingCta = oneOf(
   'see_enterprise', 'see_plans', 'contact', 'start_org', 'sign_in',
-  'open_console', 'switch_language', 'footer_home',
+  'open_console', 'switch_language', 'footer_home', 'play_trailer', 'get_app', 'dismiss_app_banner',
 );
 
 /** Where on the page the thing that was clicked sits. Two CTAs can carry the
  *  same name in different places — "contact" is in the band, the hero and the
  *  footer — and which one people use is the whole question. */
-const marketingPlacement = oneOf('nav', 'hero', 'band', 'fit', 'billing', 'signin', 'footer', 'menu', 'limit');
+const marketingPlacement = oneOf('nav', 'hero', 'band', 'fit', 'billing', 'signin', 'footer', 'menu', 'limit', 'trailer', 'app_banner');
 
 /** How the visitor arrived, in buckets. Never the referring URL: a full
  *  referrer is a browsing history, and the only thing worth knowing is which
@@ -233,9 +312,11 @@ export function agentDurationBucket(ms: number): string {
   return 'gt_60s';
 }
 
+const transferErrorCode = oneOf('none', 'network', 'timeout', 'authorization', 'storage', 'crypto', 'worker', 'other');
+
 // A new random UUID per attempt; never a storage, content, or queue identifier.
 const transferProperties: Readonly<Record<string, Rule>> = {
-  transfer_id: { type: 'transfer_id' },
+  transfer_id: { type: 'uuid' },
   item_kind: oneOf('file', 'text', 'code', 'link', 'unknown'),
   transport: oneOf('storage', 'manifest', 'direct', 'fallback'),
   cache_hit: bool,
@@ -251,11 +332,94 @@ const transferProperties: Readonly<Record<string, Rule>> = {
   foreground: bool,
   online: bool,
   outcome: oneOf('success', 'failure', 'cancelled'),
-  error_code: oneOf('none', 'network', 'timeout', 'authorization', 'storage', 'crypto', 'worker', 'other'),
+  error_code: transferErrorCode,
   timing_mode: oneOf('wall', 'cumulative_work'),
 };
 
+// Every Nearby client event carries these four. `nearby_session` is a fresh
+// random UUID per flow, linked to no server id: it only joins the steps.
+const nearbyOutcome = oneOf('ok', 'refused', 'network');
+const nearbyRefusal = oneOf(...NEARBY_REFUSAL_CODES);
+/** RSSI, dB margins and platform status numbers can be negative. */
+const signed: Rule = { type: 'number' };
+const nearby = (props: Readonly<Record<string, Rule>>): Readonly<Record<string, Rule>> => ({
+  nearby_session: { type: 'uuid' },
+  role,
+  method: oneOf('touch', 'qr'),
+  t_ms: count,
+  ...props,
+});
+
+const NEARBY_CLIENT_RULES: Record<NearbyClientEvent, Readonly<Record<string, Rule>>> = {
+  'nearby.session_started': nearby({
+    entry: oneOf('item_menu', 'item_detail', 'rail', 'menu', 'shortcut', 'tile', 'control', 'app_link', 'intent_extra', 'offer', 'browser'),
+    bt_state: oneOf('on', 'off', 'unauthorized', 'unsupported'),
+  }),
+  'nearby.permission_result': nearby({ result: oneOf('granted', 'denied', 'already'), prompt_ms: count }),
+  'nearby.bluetooth_enable_result': nearby({ result: oneOf('on', 'declined') }),
+  'nearby.advertising': nearby({
+    state: oneOf('started', 'failed', 'stopped'),
+    error_code: signed,
+    reason: oneOf('background', 'workspace_switch', 'bt_off', 'signed_out', 'user'),
+  }),
+  'nearby.token_failed': nearby({ code: oneOf('rate_limited', 'network', 'other'), attempt: count }),
+  'nearby.connect_received': nearby({ count_in_session: count }),
+  'nearby.scan_summary': nearby({
+    outcome: oneOf('touched', 'ambiguous', 'none', 'cancelled'),
+    devices_seen: count,
+    readings: count,
+    max_rssi: signed,
+    scan_ms: count,
+  }),
+  'nearby.touch_detected': nearby({ median_rssi: signed, hold_ms: count, rivals: count, margin_db: signed, ms_since_scan: count }),
+  'nearby.touch_ambiguous': nearby({ candidates: count, margin_db: signed }),
+  'nearby.candidate_picked': nearby({ picked_rank: { type: 'number', min: 1 }, decide_ms: count }),
+  'nearby.carrier_read': nearby({
+    outcome: oneOf('ok', 'timeout', 'disconnected', 'no_service', 'bad_length', 'gatt_error'),
+    gatt_status: signed,
+    mtu: count,
+    duration_ms: count,
+    attempt: count,
+  }),
+  'nearby.resolved': nearby({ outcome: nearbyOutcome, refusal: nearbyRefusal, key_check: oneOf('match', 'mismatch'), duration_ms: count }),
+  'nearby.face_shown': nearby({ touch_to_face_ms: count }),
+  'nearby.confirm_result': nearby({ result: oneOf('send', 'not_now', 'closed'), decide_ms: count }),
+  'nearby.offer_sent': nearby({ outcome: nearbyOutcome, refusal: nearbyRefusal, reused: bool, duration_ms: count }),
+  'nearby.item_copied': nearby({
+    outcome: oneOf('ok', 'failed'),
+    kind: itemKind,
+    size_bucket: sizeBucket,
+    // The transfer vocabulary: the copy is a transfer, and mobile has it already.
+    error_code: transferErrorCode,
+    duration_ms: count,
+  }),
+  'nearby.offer_shown': nearby({ has_preview: bool, offer_age_ms: count }),
+  'nearby.offer_answered': nearby({ answer: oneOf('accept', 'decline', 'dismissed', 'expired'), keep: bool, decide_ms: count }),
+  'nearby.answer_seen': nearby({ answer: oneOf('accepted', 'declined', 'no_answer'), wait_ms: count }),
+  'nearby.code_shown': nearby({ refresh: oneOf('first', 'timer', 'manual', 'expired') }),
+  // `browser` is the web: the /n/ page opened in a browser, not in an app.
+  'nearby.link_opened': nearby({ source: oneOf('app_link', 'universal_link', 'intent_extra', 'browser'), signed_in: bool, has_key: bool }),
+  'nearby.card_state': nearby({ state: oneOf('ready', 'expired', 'done', 'taken', 'no_key', 'error') }),
+  'nearby.claim_sent': nearby({ outcome: nearbyOutcome, refusal: nearbyRefusal, keep: bool }),
+  // `outcome` is the allow or deny call itself; a copy after it fails apart.
+  'nearby.claim_decided': nearby({ decision: oneOf('allow', 'deny'), outcome: nearbyOutcome, refusal: nearbyRefusal, decide_ms: count, existing: bool }),
+  'nearby.claim_answer': nearby({ answer: oneOf('allowed', 'denied', 'taken', 'expired'), wait_ms: count }),
+  'nearby.feedback': nearby({
+    moment: oneOf('found', 'ambiguous', 'request', 'accepted', 'delivered', 'declined', 'error'),
+    haptic: oneOf('rich', 'basic', 'none'),
+    sound: oneOf('played', 'muted', 'off'),
+  }),
+  'nearby.session_ended': nearby({
+    outcome: oneOf('delivered', 'declined', 'denied', 'no_answer', 'cancelled', 'failed', 'abandoned'),
+    fail_step: oneOf(...NEARBY_CLIENT_EVENTS),
+    fail_code: oneOf(...NEARBY_FAIL_CODES),
+    total_ms: count,
+    touch_to_delivered_ms: count,
+  }),
+};
+
 const EVENT_PROPERTY_RULES: Record<ProductEvent, Readonly<Record<string, Rule>>> = {
+  ...NEARBY_CLIENT_RULES,
   'transfer.started': transferProperties,
   'transfer.stage_started': transferProperties,
   'transfer.phase_timing': transferProperties,
@@ -500,6 +664,30 @@ const EVENT_PROPERTY_RULES: Record<ProductEvent, Readonly<Record<string, Rule>>>
     placement: marketingPlacement,
   },
   'marketing.language_switched': { surface: marketingSurface, from: uiLocale, to: uiLocale },
+  // How far into a video the viewer got, once per milestone per page load.
+  // `shape` is the cut that played (16:9 or 9:16); `muted` is whether the
+  // sound was off when the milestone was reached.
+  'marketing.video_progress': {
+    surface: marketingSurface,
+    video: oneOf('trailer'),
+    locale: uiLocale,
+    shape: oneOf('h', 'v'),
+    depth: oneOf('p25', 'p50', 'p75', 'p100'),
+    muted: bool,
+  },
+  nearby_token_registered: {},
+  nearby_resolved: {},
+  nearby_offer_sent: { reused: bool },
+  nearby_offer_accepted: { keep: bool },
+  nearby_offer_declined: {},
+  nearby_offer_withdrawn: {},
+  nearby_offer_expired: {},
+  nearby_code_created: {},
+  nearby_code_claimed: { keep: bool },
+  nearby_code_allowed: { existing: bool },
+  nearby_code_denied: {},
+  nearby_code_expired: {},
+  nearby_refused: { code: oneOf(...NEARBY_REFUSAL_CODES), step: oneOf('token', 'resolve', 'offer', 'accept', 'code', 'claim', 'allow', 'send') },
   'agent.tool_call': {
     tool: oneOf(...AGENT_TOOL_NAMES),
     result: oneOf('ok', 'error'),
@@ -515,7 +703,7 @@ const EVENT_PROPERTY_RULES: Record<ProductEvent, Readonly<Record<string, Rule>>>
 const platformRule = oneOf('web', 'android', 'ios', 'agent', 'unknown');
 
 function valid(rule: Rule, value: unknown): value is AnalyticsScalar {
-  if (rule.type === 'transfer_id') return typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+  if (rule.type === 'uuid') return typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
   if (rule.type === 'boolean') return typeof value === 'boolean';
   if (rule.type === 'number') {
     return typeof value === 'number' && Number.isFinite(value) && (rule.min === undefined || value >= rule.min);

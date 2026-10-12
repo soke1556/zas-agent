@@ -2,6 +2,7 @@
 // can hold a Claude Code agent and a Codex agent side by side without either
 // reading the other's keys. Nothing here talks to the network.
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { x25519 } from '@noble/curves/ed25519';
@@ -9,6 +10,8 @@ import { p256 } from '@noble/curves/nist.js';
 import type { AgentKind } from './shared/agent.js';
 import { bytesToB64 } from './shared/hash.js';
 import { ZasError } from './errors.js';
+import { validateBase, validateEndpoints, type Endpoints } from './endpoints.js';
+import { checkedRef, loadSecrets, readPrivateText, removeSecrets, splitSecrets, storeSecrets } from './secret-store.js';
 
 export interface Identity {
   version: 1;
@@ -109,7 +112,7 @@ const GRANTS_FILE = 'grants.json';
 const FINGERPRINTS_FILE = 'fingerprints.json';
 const SETTINGS_FILE = 'settings.json';
 
-function agentHome(): string {
+export function agentHome(): string {
   return process.env.ZAS_AGENT_HOME || join(homedir(), '.zas', 'agent');
 }
 
@@ -133,25 +136,19 @@ function ensureDir(dir: string): void {
 }
 
 /** Write through a temporary file so a crash mid-write cannot leave half an
- *  identity behind: either the old file stands or the new one does. The pid is
- *  in the name because two zas-agent processes can share one profile. */
+ *  identity behind: either the old file stands or the new one does. A random
+ *  name and exclusive creation keep concurrent writers from sharing a temp. */
 function writePrivate(dir: string, name: string, value: unknown): void {
   ensureDir(dir);
   const target = join(dir, name);
-  const tmp = `${target}.${process.pid}.tmp`;
-  writeFileSync(tmp, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
-  if (process.platform !== 'win32') chmodSync(tmp, 0o600);
-  renameSync(tmp, target);
+  const tmp = `${target}.${randomUUID()}.tmp`;
+  try {
+    writeFileSync(tmp, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600, flag: 'wx' });
+    if (process.platform !== 'win32') chmodSync(tmp, 0o600);
+    renameSync(tmp, target);
+  } finally { rmSync(tmp, { force: true }); }
 }
 
-function readText(path: string): string | null {
-  try {
-    return readFileSync(path, 'utf8');
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
-    throw err;
-  }
-}
 
 /** Caches. A damaged one is no loss: the next call to /v1/agents/me rebuilds it. */
 function readCache<T>(dir: string, name: string): T | null {
@@ -167,9 +164,9 @@ function readCache<T>(dir: string, name: string): T | null {
 /** Key material. Absent means "never paired"; damaged means something is
  *  wrong, and reading it as "never paired" would quietly mint a second agent
  *  and orphan the uid the owner already approved. So it throws instead. */
-function readSecret<T>(dir: string, name: string): T | null {
+function readStored(dir: string, name: string): Record<string, unknown> | null {
   const target = resolve(join(dir, name));
-  const text = readText(target);
+  const text = readPrivateText(target);
   if (text === null) return null;
   let parsed: unknown = null;
   try {
@@ -177,8 +174,48 @@ function readSecret<T>(dir: string, name: string): T | null {
   } catch {
     parsed = null;
   }
-  if (!parsed || typeof parsed !== 'object') throw new ZasError('identity_corrupt', 0, target);
-  return parsed as T;
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new ZasError('identity_corrupt', 0, target);
+  return parsed as Record<string, unknown>;
+}
+
+function writeSecret(dir: string, name: string, value: Identity | Pending): void {
+  validateEndpoints(value);
+  const { publicData, secrets } = splitSecrets({ ...value });
+  const previous = readStored(dir, name);
+  ensureDir(dir);
+  const ref = storeSecrets(dir, secrets);
+  try { writePrivate(dir, name, { ...publicData, secret_ref: ref }); }
+  catch (error) {
+    try { removeSecrets(dir, ref); } catch { /* preserve the original error */ }
+    throw error;
+  }
+  if (previous?.secret_ref) {
+    try { removeSecrets(dir, previous.secret_ref); } catch { /* metadata already committed */ }
+  }
+}
+
+function readSecret<T extends Identity | Pending>(dir: string, name: string): T | null {
+  const stored = readStored(dir, name);
+  if (!stored) return null;
+  validateEndpoints(stored as unknown as Endpoints);
+  if (stored.secret_ref) {
+    const { secret_ref, ...publicData } = stored;
+    const secrets = loadSecrets(dir, secret_ref);
+    return { ...publicData, ...secrets } as unknown as T;
+  }
+  // Commit the replacement only after the OS store has accepted the keys.
+  // A failure leaves the old JSON usable for recovery on the next run.
+  splitSecrets(stored);
+  writeSecret(dir, name, stored as unknown as T);
+  return stored as unknown as T;
+}
+
+export function secretStorage(profile: string): string {
+  const stored = readStored(profileDir(profile), IDENTITY_FILE) ?? readStored(profileDir(profile), PENDING_FILE);
+  if (!stored) return 'not paired';
+  if (!stored.secret_ref) return 'legacy file (migration pending)';
+  const labels = { dpapi: 'Windows DPAPI (current user)', keychain: 'macOS Keychain', 'secret-service': 'Linux Secret Service', file: 'owner-only file (OS store unavailable)' };
+  return labels[checkedRef(stored.secret_ref).backend];
 }
 
 export function newKeyMaterial(): Pick<Identity, 'x25519_private' | 'x25519_public' | 'p256_private' | 'p256_public'> {
@@ -194,23 +231,30 @@ export function newKeyMaterial(): Pick<Identity, 'x25519_private' | 'x25519_publ
 }
 
 export function loadIdentity(profile: string): Identity | null {
-  return readSecret<Identity>(profileDir(profile), IDENTITY_FILE);
+  const identity = readSecret<Identity>(profileDir(profile), IDENTITY_FILE);
+  if (identity) validateEndpoints(identity);
+  return identity;
 }
 
 export function saveIdentity(profile: string, identity: Identity): void {
-  writePrivate(profileDir(profile), IDENTITY_FILE, identity);
+  writeSecret(profileDir(profile), IDENTITY_FILE, identity);
 }
 
 export function loadPending(profile: string): Pending | null {
-  return readSecret<Pending>(profileDir(profile), PENDING_FILE);
+  const pending = readSecret<Pending>(profileDir(profile), PENDING_FILE);
+  if (pending) validateEndpoints(pending);
+  return pending;
 }
 
 export function savePending(profile: string, pending: Pending): void {
-  writePrivate(profileDir(profile), PENDING_FILE, pending);
+  writeSecret(profileDir(profile), PENDING_FILE, pending);
 }
 
 export function clearPending(profile: string): void {
-  rmSync(join(profileDir(profile), PENDING_FILE), { force: true });
+  const dir = profileDir(profile);
+  const stored = readStored(dir, PENDING_FILE);
+  rmSync(join(dir, PENDING_FILE), { force: true });
+  if (stored?.secret_ref) removeSecrets(dir, stored.secret_ref);
 }
 
 export function loadGrants(profile: string): GrantCache | null {
@@ -245,6 +289,8 @@ export function saveFingerprints(profile: string, cache: FingerprintCache): void
  *  instead of inside one. */
 export interface AgentSettings {
   version: 1;
+  /** Automatic release checks and managed launch selection; absent means on. */
+  auto_update?: boolean;
   /** Absent means nobody chose, which reads as on. */
   telemetry?: boolean;
   decided_at?: number;
@@ -266,10 +312,13 @@ export function saveSettings(settings: AgentSettings): void {
 /** Read at call time, not at import: tests and the emulator set these after
  *  the module is already loaded. */
 export function defaultEndpoints(): Pick<Identity, 'api_base' | 'token_base' | 'oprf_base' | 'firestore_project'> {
-  return {
+  const endpoints = {
     api_base: process.env.ZAS_API_BASE || 'https://zas.red/api',
     token_base: process.env.ZAS_TOKEN_BASE || 'https://zas.red/anon-token',
     oprf_base: process.env.ZAS_OPRF_BASE || 'https://zas.red/oprf',
     firestore_project: process.env.ZAS_FIREBASE_PROJECT || 'zas-me',
   };
+  validateEndpoints(endpoints);
+  if (process.env.ZAS_WEB_BASE) validateBase(process.env.ZAS_WEB_BASE, 'ZAS_WEB_BASE');
+  return endpoints;
 }

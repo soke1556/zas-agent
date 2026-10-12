@@ -6,6 +6,8 @@ import { AGENT_TOKEN_TTL_SEC, signAgentChallenge } from './shared/agent.js';
 import { b64ToBytes, bytesToB64 } from './shared/hash.js';
 import { errorFromResponse, ZasError } from './errors.js';
 import type { Identity } from './identity.js';
+import { emulatorBase, validateBase, validateEndpoints } from './endpoints.js';
+import { configuredDedupePolicy, dedupeRequest, verifiedDedupeResponse, type DedupePolicy, type DedupeCapability } from './shared/dedupe-oprf.js';
 
 /** Sign in again this long before the token dies, so a request never starts
  *  with a token that expires while it is in flight. */
@@ -28,6 +30,7 @@ async function readBody(res: Response): Promise<unknown> {
 function jsonInit(method: string, body: unknown, headers: Record<string, string>): RequestInit {
   return {
     method,
+    redirect: 'error',
     headers: { ...(body === undefined ? {} : { 'Content-Type': 'application/json' }), ...headers },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   };
@@ -43,6 +46,7 @@ export async function apiPublic<T>(
   headers: Record<string, string> = {},
   fetchImpl?: FetchLike,
 ): Promise<T> {
+  validateBase(base, 'API base');
   const call = fetchImpl ?? ((input: RequestInfo | URL, init?: RequestInit) => fetch(input, init));
   const res = await call(`${base}${path}`, jsonInit(method, body, headers));
   const parsed = res.status === 204 ? undefined : await readBody(res);
@@ -64,11 +68,13 @@ export class ZasClient {
     public readonly identity: Identity,
     opts: { fetch?: FetchLike; now?: () => number } = {},
   ) {
+    validateEndpoints(identity);
     this.call = opts.fetch ?? ((input: RequestInfo | URL, init?: RequestInit) => fetch(input, init));
     this.now = opts.now ?? (() => Date.now());
   }
 
   async signIn(): Promise<void> {
+    validateEndpoints(this.identity);
     const { agent_uid, owner_uid, token_base, p256_private } = this.identity;
     const chal = await apiPublic<{ challenge_id: string; nonce: string }>(
       token_base, 'POST', '/v1/agents/challenge', { agent_uid, owner_uid }, {}, this.call,
@@ -82,6 +88,7 @@ export class ZasClient {
     );
     const res = await this.call(`${ZasClient.identityToolkitBase()}/accounts:signInWithCustomToken?key=${ZasClient.apiKey()}`, {
       method: 'POST',
+      redirect: 'error',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ token: tok.token, returnSecureToken: true }),
     });
@@ -112,6 +119,7 @@ export class ZasClient {
   /** Optional traffic must never initiate or invalidate the shared auth session.
    * One bounded request, no retries, and no response body parsing. */
   async reportTelemetry(body: unknown): Promise<void> {
+    validateEndpoints(this.identity);
     const session = this.session;
     if (this.telemetrySending || !session || session.expiresAt <= this.now() + REFRESH_MARGIN_MS) return;
     this.telemetrySending = true;
@@ -133,6 +141,8 @@ export class ZasClient {
   }
 
   private async authed(url: string, method: string, body: unknown, headers: Record<string, string>): Promise<Response> {
+    validateEndpoints(this.identity);
+    validateBase(url, 'Request URL');
     const token = await this.idToken();
     return this.call(url, jsonInit(method, body, { Authorization: `Bearer ${token}`, ...headers }));
   }
@@ -156,10 +166,22 @@ export class ZasClient {
     return this.authed(url, method, body, headers);
   }
 
-  async oprfEvaluate(blinded: string[]): Promise<string[]> {
-    const res = await this.authedRetrying(`${this.identity.oprf_base}/evaluate`, 'POST', { blinded }, {});
+  async dedupePolicy(): Promise<DedupePolicy> {
+    const capabilities = await this.api<{ dedupe?: DedupeCapability }>('GET', '/agents/me');
+    try { return configuredDedupePolicy(capabilities.dedupe, process.env.ZAS_VOPRF_PUBLIC_KEYS); }
+    catch { throw new ZasError('invalid_voprf_configuration', 0); }
+  }
+
+  async oprfEvaluate(blinded: string[], policy: DedupePolicy = { mode: 0 }): Promise<string[]> {
+    const points = policy.mode === 1 ? blinded.map(b64ToBytes) : [];
+    const body = policy.mode === 1 ? dedupeRequest(points, policy) : { blinded };
+    const res = await this.authedRetrying(`${this.identity.oprf_base}/evaluate`, 'POST', body, {});
     const parsed = await readBody(res);
     if (!res.ok) throw errorFromResponse(res.status, parsed);
+    if (policy.mode === 1) {
+      try { return verifiedDedupeResponse(parsed, points, policy).map(bytesToB64); }
+      catch { throw new ZasError('invalid_voprf_proof', 0); }
+    }
     return (parsed as { evaluated?: string[] }).evaluated ?? [];
   }
 
@@ -196,13 +218,12 @@ export class ZasClient {
   }
 
   static identityToolkitBase(): string {
-    const host = process.env.FIREBASE_AUTH_EMULATOR_HOST;
-    return host ? `http://${host}/identitytoolkit.googleapis.com/v1` : 'https://identitytoolkit.googleapis.com/v1';
+    const host = emulatorBase('FIREBASE_AUTH_EMULATOR_HOST');
+    return host ? `${host}/identitytoolkit.googleapis.com/v1` : 'https://identitytoolkit.googleapis.com/v1';
   }
 
   static firestoreBase(project: string): string {
-    const host = process.env.FIRESTORE_EMULATOR_HOST;
-    const root = host ? `http://${host}` : 'https://firestore.googleapis.com';
+    const root = emulatorBase('FIRESTORE_EMULATOR_HOST') ?? 'https://firestore.googleapis.com';
     return `${root}/v1/projects/${project}/databases/(default)/documents`;
   }
 }

@@ -144,7 +144,7 @@ function fakeServer(opts: {
     return new Response(null, { status: 200 });
   });
   const idToken = vi.fn(async () => 'id-token-1');
-  const client = { identity, api, firestoreRunQuery, oprfEvaluate, idToken } as unknown as ZasClient;
+  const client = { identity, api, firestoreRunQuery, oprfEvaluate, idToken, dedupePolicy: vi.fn(async () => ({ mode: 0 })) } as unknown as ZasClient;
   return { api, calls, patches, replaces, puts, client, fetchImpl, firestoreRunQuery };
 }
 

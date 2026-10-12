@@ -1,3 +1,4 @@
+import './helpers/memory-secret-store.js';
 import { claudeSnippet, codexSnippet } from '../src/snippets.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';

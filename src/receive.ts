@@ -10,7 +10,7 @@ import { TransferTelemetry, itemKind } from './transfer-telemetry.js';
 // asked it to, and it stops when the call ends.
 import { randomBytes } from 'node:crypto';
 import {
-  closeSync, existsSync, mkdirSync, openSync, renameSync, rmdirSync, unlinkSync, writeSync,
+  closeSync, existsSync, mkdirSync, openSync, rmdirSync, unlinkSync, writeSync,
 } from 'node:fs';
 import { dirname } from 'node:path';
 import { DIRECT_FILE_MAX_BYTES } from './shared/direct.js';
@@ -28,7 +28,7 @@ import { channelLabel, defaultSleep, installWebRtc, newDeviceToken, sealer } fro
 import { ZasError } from './errors.js';
 import { channelAccountOf, channelKeyOf, grantsFor, resolveChannel } from './grants.js';
 import type { RemoteGrant } from './identity.js';
-import { destinationOf } from './read.js';
+import { destinationOf, publishDownload } from './destination.js';
 import type { SendContext } from './send.js';
 
 /** What a receive reports while it runs. `waiting` is the wait for somebody to
@@ -141,7 +141,7 @@ async function receiveGrantFor(ctx: SendContext, channel: string | undefined): P
 }
 
 /** The engine's sink, writing the way `zas_get_item` does: 0600, through a
- *  temporary name beside the destination, renamed only once the engine closes
+ *  temporary name beside the destination, published without replacement once the engine closes
  *  it. A transfer that breaks leaves nothing behind — least of all a file with
  *  the right name and the wrong length, which reads as complete. */
 class DiskSink implements Sink {
@@ -187,7 +187,7 @@ class DiskSink implements Sink {
       if (this.fd === undefined) return;
       closeSync(this.fd);
       this.fd = undefined;
-      renameSync(this.tmp!, this.target!);
+      this.target = publishDownload(this.tmp!, this.target!);
       this.tmp = undefined;
     } catch (error) {
       throw this.remember(error);
@@ -219,6 +219,7 @@ class DiskSink implements Sink {
    *  also carries. */
   private remember(error: unknown): unknown {
     const failure = error as NodeJS.ErrnoException;
+    if (error instanceof ZasError && error.code === 'write_failed') this.failure = error;
     if (typeof failure?.syscall === 'string' || typeof failure?.errno === 'number') this.failure = failure;
     return error;
   }
@@ -376,7 +377,7 @@ async function receiveDirectMeasured(
   report('finishing');
   if (phase === 'done') {
     // The engine closed the sink, so the bytes are already under their final
-    // name and the digest was checked before the rename.
+    // name and the digest was checked before publication.
     await setState('done');
     return {
       offer_id: offerId,
