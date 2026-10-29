@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-10-29
+
+### Changed
+
+- Stream file sends and replacements through 16 MiB plaintext batches instead
+  of retaining the entire file and all encrypted chunks. Preserve chunking,
+  encryption, send-only grants, deduplication and existing idempotency keys.
+- Refuse publication when the source changes during hashing or upload. Drain
+  and cancel uploads already in flight before returning a batch failure; bound
+  metadata and authentication requests to 30 seconds.
+- Reconcile the monorepo agent with v0.11.0 and add `check:agent -- --source
+  <zas.web checkout>` to detect runtime and portable-test drift before export.
+- Keep automatic updates disabled for built monorepo packages and source
+  archives that do not have their own `.git` directory.
+
+### Security
+
+- Upgrade Zod and vulnerable transitive dependencies. Replace the thumbnail
+  decoder with Sharp, limit decoded images to 16 million pixels, and keep
+  previews optional when a decoder is unavailable. BMP previews are no longer
+  generated; WebP previews are now supported.
+
 ## [0.11.0] - 2026-10-12
 
 ### Added
@@ -384,7 +406,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   two separate identities that cannot read each other's keys.
 - Install snippets for Claude Code and Codex, printed by `zas-agent pair`.
 
-[Unreleased]: https://github.com/soke1556/zas-agent/compare/v0.11.0...HEAD
+[Unreleased]: https://github.com/soke1556/zas-agent/compare/v0.12.0...HEAD
+[0.12.0]: https://github.com/soke1556/zas-agent/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/soke1556/zas-agent/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/soke1556/zas-agent/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/soke1556/zas-agent/compare/v0.8.0...v0.9.0

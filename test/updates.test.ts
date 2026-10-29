@@ -77,6 +77,12 @@ describe('release policy and controls', () => {
 });
 
 describe('staging', () => {
+  it('does not auto-update a built monorepo package without its own .git', () => {
+    mkdirSync(join(home, 'src'));
+    writeFileSync(join(home, 'src', 'cli.ts'), '// source checkout');
+    expect(isReleaseInstall('1.0.0', pathToFileURL(join(home, 'dist', 'cli.js')).href)).toBe(false);
+  });
+
   it('stages a runnable release, preserves pairing data, and selects it only for older launches', async () => {
     mkdirSync(join(home, 'codex'));
     writeFileSync(join(home, 'codex', 'identity.json'), 'pairing stays here');
@@ -157,12 +163,16 @@ describe('staging', () => {
     const waiting = new Promise<void>((resolve) => { finish = resolve; });
     const deps = release();
     const install = deps.install!;
-    deps.install = async (...args) => { await waiting; await install(...args); };
+    let started!: () => void;
+    const installing = new Promise<void>((resolve) => { started = resolve; });
+    deps.install = async (...args) => { started(); await waiting; await install(...args); };
     const first = checkForUpdate('1.0.0', true, undefined, deps);
-    await vi.waitFor(() => expect(deps.fetch).toHaveBeenCalled());
-    expect(await checkForUpdate('1.0.0', true, undefined, deps)).toContain('in progress');
-    finish();
-    await first;
+    try {
+      // Wait for the actual lock-owning install, including Windows ACL setup.
+      // Racing the first promise also propagates a setup failure immediately.
+      await Promise.race([installing, first.then(() => { throw new Error('Install did not start'); })]);
+      expect(await checkForUpdate('1.0.0', true, undefined, deps)).toContain('in progress');
+    } finally { finish(); await first; }
     expect(deps.fetch).toHaveBeenCalledTimes(1);
   });
 

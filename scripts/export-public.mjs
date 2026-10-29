@@ -46,7 +46,7 @@ const SHARED_ALWAYS = ['keys.ts'];
 /** Everything copied verbatim from `agent/` to the target root. `public/` is
  *  the repo-only half: the files that only make sense once this package is a
  *  repository of its own, and that the monorepo itself must not grow. */
-const COPY_FILES = ['build.mjs', 'tsconfig.json', 'package.json', 'README.md', 'LICENSE', 'CHANGELOG.md'];
+const COPY_FILES = ['build.mjs', 'tsconfig.json', 'package.json', 'README.md', 'LICENSE', 'CHANGELOG.md', 'shared-source.json'];
 
 const fail = (message) => { throw new Error(message); };
 
@@ -315,6 +315,9 @@ async function main() {
   cpSync(join(AGENT_DIR, 'public'), target, { recursive: true });
   mkdirSync(join(target, 'scripts'), { recursive: true });
   cpSync(fileURLToPath(import.meta.url), join(target, 'scripts', 'export-public.mjs'));
+  for (const name of ['check-shared.mjs', 'check-agent-source.mjs', 'check-update-launch.mjs']) {
+    cpSync(join(AGENT_DIR, 'scripts', name), join(target, 'scripts', name));
+  }
 
   // 3. The shared modules, under src/shared/.
   for (const rel of [...shared].sort()) {

@@ -223,8 +223,10 @@ ones marked *(server-side)* are enforced by the Zas server.
   budget charged to your account so ten agents are not ten times your own
   allowance *(server-side)*.
 - **As many agents as your plan or your organization allows** *(server-side)*.
-- **Files up to 5 GiB**, and in practice less: the agent reads a file into
-  memory to hash it, so the machine's memory is the real ceiling.
+- **Files up to 5 GiB**, subject to your plan's limit. File sends and
+  replacements hash incrementally and upload in bounded batches. A file
+  changed during the transfer is refused before publication. Image previews
+  still decode eligible images in memory; inputs over 80 MiB skip the preview.
 
 ### The error vocabulary
 
@@ -255,7 +257,7 @@ string ever reaches a terminal.
 | `direct_cancelled` | The offer was cancelled from the other side. |
 | `direct_failed` | The Directo transfer failed in flight. |
 | `direct_not_failed` | That job is not a Directo transfer that failed in flight. |
-| `file_changed` | The file changed since the Directo offer. |
+| `file_changed` | The file changed during the transfer; send it again. |
 | `webrtc_unavailable` | The WebRTC engine could not be loaded on this machine. |
 | `fallback_unavailable` | Reliable delivery is not available right now. |
 | `key_stale` | The channel key changed; the owner refreshes it by opening Zas. |
@@ -309,6 +311,15 @@ stack trace.
 | `zas_edit_item` | Changes an item this agent sent, keeping its id: the title of a file or a note, or a note's text, language and secret cover. Needs a grant that includes reading and sending. The owner's activity log records it. |
 | `zas_replace_file` | Replaces the bytes of a file this agent sent with a file from this machine, keeping the item id, its place in the channel and its pin. Returns the item id, or a job id after a minute. Refuses notes, shared items, and items sent by anyone else. |
 | `zas_jobs` | Lists the sends and Directo transfers this server started, newest first, with the phase each one reached — and where a `job_id` from a long send is redeemed. |
+
+Image previews are optional: JPEG, PNG, WebP, GIF and TIFF images up to
+80 MiB and 16 million decoded pixels can receive a preview. Larger images
+and unsupported formats are still sent, without a preview.
+
+Jobs belong to the running MCP process. Stored file sends use bounded memory,
+but upload progress is not saved across restarts. After a restart, retry the
+same send; its content, destination, title and lifetime identify the request
+so a lost completion response does not create a second item.
 
 `channel` takes a channel name or a channel id. A name has to match exactly one
 of the channels you granted; with exactly one grant, `zas_send_file`,

@@ -5,6 +5,12 @@ For the maintainer. A release is a tag; everything after that is a workflow.
 ## Cutting one
 
 1. Make sure `main` is green and the working tree is clean.
+   Before exporting from the monorepo, backport public-repository changes and
+   run `npm run check:agent -- --source ../zas.web` in the public checkout.
+   This compares runtime sources and portable tests, accounting for shared
+   import paths. Run `npm run check:shared -- --source ../zas.web` separately
+   to verify the pinned shared codecs and vectors. Both must pass before an
+   export can replace the public tree.
 2. Bump `version` in `package.json`. In the same commit, bump both `version`
    fields in `server.json` (`version` and `packages[0].version`) to the same
    value.

@@ -97,7 +97,7 @@ const SENTENCES: Record<string, string> = {
   direct_cancelled: 'The offer was cancelled from the other side.',
   direct_failed: 'The Directo transfer failed ({path}). Ask the owner before you use zas_send_direct_fallback or zas_receive_direct_fallback.',
   direct_not_failed: 'That job is not a Directo transfer that failed in flight.',
-  file_changed: 'The file changed since the Directo offer. Send it again.',
+  file_changed: 'The file changed during the transfer. Send it again.',
   webrtc_unavailable: 'The WebRTC engine (node-datachannel) could not be loaded on this machine.',
   fallback_unavailable: 'Reliable delivery is not available right now. Try again later.',
   key_stale: 'The channel key changed. The owner refreshes it by opening Zas.',

@@ -15,8 +15,21 @@ const REFRESH_MARGIN_MS = 5 * 60 * 1000;
 
 type FetchLike = typeof fetch;
 
+// Bound metadata/auth requests as well as their response bodies. An upload
+// batch cannot drain if a sibling is stuck waiting for an API response.
+const REQUEST_TIMEOUT_MS = 30_000;
+function requestSignal(signal?: AbortSignal): AbortSignal {
+  const timeout = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
+  return signal ? AbortSignal.any([signal, timeout]) : timeout;
+}
+
+function timeoutError(error: unknown): never {
+  if (error instanceof Error && error.name === 'TimeoutError') throw new ZasError('network', 0);
+  throw error;
+}
+
 async function readBody(res: Response): Promise<unknown> {
-  const text = await res.text();
+  const text = await res.text().catch(timeoutError);
   if (!text) return {};
   try {
     return JSON.parse(text) as unknown;
@@ -48,7 +61,7 @@ export async function apiPublic<T>(
 ): Promise<T> {
   validateBase(base, 'API base');
   const call = fetchImpl ?? ((input: RequestInfo | URL, init?: RequestInit) => fetch(input, init));
-  const res = await call(`${base}${path}`, jsonInit(method, body, headers));
+  const res = await call(`${base}${path}`, { ...jsonInit(method, body, headers), signal: requestSignal() }).catch(timeoutError);
   const parsed = res.status === 204 ? undefined : await readBody(res);
   if (!res.ok) throw errorFromResponse(res.status, parsed);
   return parsed as T;
@@ -89,11 +102,12 @@ export class ZasClient {
     const res = await this.call(`${ZasClient.identityToolkitBase()}/accounts:signInWithCustomToken?key=${ZasClient.apiKey()}`, {
       method: 'POST',
       redirect: 'error',
+      signal: requestSignal(),
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ token: tok.token, returnSecureToken: true }),
-    });
+    }).catch(timeoutError);
     if (!res.ok) throw new ZasError('sign_in_failed', res.status);
-    const data = await res.json() as { idToken: string; expiresIn?: string };
+    const data = await res.json().catch(timeoutError) as { idToken: string; expiresIn?: string };
     // A missing or unparsable expiresIn would leave the session looking fresh
     // forever. Fall back to the life the token function actually grants.
     const seconds = Number(data.expiresIn);
@@ -133,18 +147,20 @@ export class ZasClient {
     finally { this.telemetrySending = false; }
   }
 
-  async api<T>(method: string, path: string, body?: unknown, headers: Record<string, string> = {}): Promise<T> {
-    const res = await this.authedRetrying(`${this.identity.api_base}/v1${path}`, method, body, headers);
+  async api<T>(method: string, path: string, body?: unknown, headers: Record<string, string> = {}, signal?: AbortSignal): Promise<T> {
+    const res = await this.authedRetrying(`${this.identity.api_base}/v1${path}`, method, body, headers, requestSignal(signal)).catch(timeoutError);
     const parsed = res.status === 204 ? undefined : await readBody(res);
     if (!res.ok) throw errorFromResponse(res.status, parsed);
     return parsed as T;
   }
 
-  private async authed(url: string, method: string, body: unknown, headers: Record<string, string>): Promise<Response> {
+  private async authed(url: string, method: string, body: unknown, headers: Record<string, string>, signal: AbortSignal = requestSignal()): Promise<Response> {
+    signal.throwIfAborted();
     validateEndpoints(this.identity);
     validateBase(url, 'Request URL');
     const token = await this.idToken();
-    return this.call(url, jsonInit(method, body, { Authorization: `Bearer ${token}`, ...headers }));
+    signal.throwIfAborted();
+    return this.call(url, { ...jsonInit(method, body, { Authorization: `Bearer ${token}`, ...headers }), signal });
   }
 
   /** One authenticated call, with one fresh sign-in if the token is rejected.
@@ -157,13 +173,14 @@ export class ZasClient {
     method: string,
     body: unknown,
     headers: Record<string, string>,
+    signal: AbortSignal = requestSignal(),
   ): Promise<Response> {
-    const res = await this.authed(url, method, body, headers);
+    const res = await this.authed(url, method, body, headers, signal);
     if (res.status !== 401) return res;
     // Drain the body first, or undici holds the connection open.
     await res.body?.cancel().catch(() => {});
     this.session = null;
-    return this.authed(url, method, body, headers);
+    return this.authed(url, method, body, headers, signal);
   }
 
   async dedupePolicy(): Promise<DedupePolicy> {
@@ -175,7 +192,7 @@ export class ZasClient {
   async oprfEvaluate(blinded: string[], policy: DedupePolicy = { mode: 0 }): Promise<string[]> {
     const points = policy.mode === 1 ? blinded.map(b64ToBytes) : [];
     const body = policy.mode === 1 ? dedupeRequest(points, policy) : { blinded };
-    const res = await this.authedRetrying(`${this.identity.oprf_base}/evaluate`, 'POST', body, {});
+    const res = await this.authedRetrying(`${this.identity.oprf_base}/evaluate`, 'POST', body, {}).catch(timeoutError);
     const parsed = await readBody(res);
     if (!res.ok) throw errorFromResponse(res.status, parsed);
     if (policy.mode === 1) {
@@ -191,7 +208,7 @@ export class ZasClient {
   async firestoreRunQuery(parentPath: string, query: object): Promise<unknown[]> {
     const base = ZasClient.firestoreBase(this.identity.firestore_project);
     const url = `${base}${parentPath ? `/${parentPath}` : ''}:runQuery`;
-    const res = await this.authed(url, 'POST', { structuredQuery: query }, {});
+    const res = await this.authed(url, 'POST', { structuredQuery: query }, {}).catch(timeoutError);
     const parsed = await readBody(res);
     if (!res.ok) throw errorFromResponse(res.status, parsed);
     if (!Array.isArray(parsed)) return [];
@@ -205,7 +222,7 @@ export class ZasClient {
    *  which an offer's sender may read without a grant on the channel. */
   async firestoreGet(path: string): Promise<Record<string, unknown> | null> {
     const base = ZasClient.firestoreBase(this.identity.firestore_project);
-    const res = await this.authed(`${base}/${path}`, 'GET', undefined, {});
+    const res = await this.authed(`${base}/${path}`, 'GET', undefined, {}).catch(timeoutError);
     const parsed = await readBody(res);
     if (res.status === 404) return null;
     if (!res.ok) throw errorFromResponse(res.status, parsed);
