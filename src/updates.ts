@@ -39,8 +39,9 @@ export function setUpdates(enabled: boolean): void {
 export function isReleaseInstall(version: string, selfUrl: string): boolean {
   if (!RELEASE.test(version)) return false;
   const root = dirname(dirname(fileURLToPath(selfUrl)));
-  // A built local checkout is still a checkout, including a git worktree.
-  return !existsSync(join(root, '.git'));
+  // A monorepo package has its .git above this root; source archives may have
+  // none at all. Published npm packages contain dist, never src/cli.ts.
+  return !existsSync(join(root, '.git')) && !existsSync(join(root, 'src', 'cli.ts'));
 }
 
 const updateHome = () => resolve(agentHome(), '.updates');

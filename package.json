@@ -1,6 +1,6 @@
 {
   "name": "zas-agent",
-  "version": "0.11.0",
+  "version": "0.12.0",
   "description": "MCP server that lets a coding agent send files and notes into your Zas channels, and send or receive files live through Directo.",
   "type": "module",
   "license": "MIT",
@@ -31,7 +31,7 @@
     "CHANGELOG.md"
   ],
   "engines": {
-    "node": ">=20"
+    "node": ">=20.9.0"
   },
   "publishConfig": {
     "access": "public",
@@ -43,6 +43,7 @@
     "typecheck": "tsc -p tsconfig.json",
     "prepack": "node build.mjs",
     "check:shared": "node scripts/check-shared.mjs",
+    "check:agent": "node scripts/check-agent-source.mjs",
     "check:updates": "node scripts/check-update-launch.mjs"
   },
   "dependencies": {
@@ -51,9 +52,9 @@
     "@noble/curves": "^1.9.0",
     "@noble/hashes": "^1.8.0",
     "hash-wasm": "^4.12.0",
-    "jimp": "^1.6.0",
     "node-datachannel": "^0.33.2",
-    "zod": "^3.25.76"
+    "zod": "^4.6.7",
+    "sharp": "^0.35.5"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

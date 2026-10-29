@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { Jimp } from 'jimp';
+import sharp from 'sharp';
 import { agentSendIdempotencyKey } from '../src/shared/agent.js';
 import { chunkStream } from '../src/shared/chunker.js';
 import { blake3Bytes, blake3Hex, b64ToBytes, bytesToB64, bytesToHex, concatBytes, hmacSha256 } from '../src/shared/hash.js';
@@ -16,7 +16,7 @@ import {
   defaultEndpoints, loadFingerprints, newKeyMaterial, profileDir, saveFingerprints, type Identity, type RemoteGrant,
 } from '../src/identity.js';
 import {
-  forgetLink, MAX_REFUSALS_PER_SEND, mimeFor, OPRF_PROBE_BATCH, sendFile, sendNote, type SendContext,
+  forgetLink, MAX_REFUSALS_PER_SEND, mimeFor, OPRF_PROBE_BATCH, placeFile, sendFile, sendNote, UPLOAD_BATCH_BYTES, type SendContext,
 } from '../src/send.js';
 
 const SERVER_KEY = serverKeyFromSeed(new Uint8Array(32).fill(7));
@@ -230,6 +230,79 @@ describe('send', () => {
     writeFileSync(path, content);
     return path;
   }
+
+  it('uploads before consuming the whole stream and deduplicates across batches', async () => {
+    const server = fakeServer();
+    let consumed = 0;
+    let firstUploadAt = 0;
+    const block = new Uint8Array(1024 * 1024).fill(17);
+    async function* input() {
+      for (let i = 0; i < 40; i++) { consumed += block.length; yield block; }
+    }
+    vi.stubGlobal('fetch', async (...args: Parameters<typeof fetch>) => {
+      firstUploadAt ||= consumed;
+      return server.fetchImpl(...args);
+    });
+    const placed = await placeFile({ identity, client: server.client, profile: 'p' }, input());
+    expect(consumed).toBe(40 * 1024 * 1024);
+    expect(firstUploadAt).toBeLessThanOrEqual(UPLOAD_BATCH_BYTES + 8 * 1024 * 1024);
+    expect(placed).toHaveLength(5);
+    expect(server.puts).toHaveLength(1);
+    expect(server.probes.flat()).toHaveLength(1);
+    expect(new Set(placed.map(p => p.entry.cap)).size).toBe(1);
+    expect(placed.reduce((sum, p) => sum + p.entry.size - 16, 0)).toBe(consumed);
+  }, 30000);
+
+  it('does not publish a file modified during upload or cache its receipt', async () => {
+    const server = fakeServer();
+    const path = write('changing.bin', 'original');
+    vi.stubGlobal('fetch', async (...args: Parameters<typeof fetch>) => {
+      writeFileSync(path, 'modified file');
+      return server.fetchImpl(...args);
+    });
+    await expect(sendFile({ identity, client: server.client, profile: 'p' }, { path }))
+      .rejects.toMatchObject({ code: 'file_changed' });
+    expect(server.links).toHaveLength(0);
+    expect(loadFingerprints('p').entries).toEqual({});
+  });
+
+  it('drains in-flight uploads before returning a batch failure', async () => {
+    const server = fakeServer();
+    let release!: () => void;
+    const pending = new Promise<void>(resolve => { release = resolve; });
+    let calls = 0;
+    vi.stubGlobal('fetch', async () => {
+      if (++calls === 1) return new Response(null, { status: 403 });
+      await pending;
+      return new Response(null, { status: 200 });
+    });
+    let settled = false;
+    const result = placeFile({ identity, client: server.client, profile: 'p' }, THREE_CHUNKS)
+      .then(() => { settled = true; return null; }, error => { settled = true; return error; });
+    try {
+      await vi.waitFor(() => expect(calls).toBe(3));
+      expect(settled).toBe(false);
+    } finally { release(); }
+    expect(await result).toMatchObject({ code: 'upload_failed', status: 403 });
+  });
+
+  it('aborts stalled sibling uploads when a batch fails without committing them', async () => {
+    const server = fakeServer();
+    let calls = 0, aborted = 0;
+    vi.stubGlobal('fetch', async (_url: unknown, init: RequestInit) => {
+      if (++calls === 1) return new Response(null, { status: 403 });
+      return new Promise<Response>((_resolve, reject) => {
+        const stop = () => { aborted++; reject(init.signal!.reason); };
+        if (init.signal!.aborted) stop();
+        else init.signal!.addEventListener('abort', stop, { once: true });
+      });
+    });
+    await expect(placeFile({ identity, client: server.client, profile: 'p' }, THREE_CHUNKS))
+      .rejects.toMatchObject({ code: 'upload_failed', status: 403 });
+    expect(calls).toBe(3);
+    expect(aborted).toBe(2);
+    expect(server.calls.some(call => call.endsWith('/commit'))).toBe(false);
+  });
 
   it('chunks, encrypts, uploads and seals a file into the grant channel', async () => {
     const server = fakeServer();
@@ -622,7 +695,7 @@ describe('send', () => {
   it('puts a thumbnail in the manifest for an image', async () => {
     const server = fakeServer();
     vi.stubGlobal('fetch', server.fetchImpl);
-    const png = new Uint8Array(await new Jimp({ width: 300, height: 200, color: 0x00ff00ff }).getBuffer('image/png'));
+    const png = new Uint8Array(await sharp({ create: { width: 300, height: 200, channels: 4, background: '#00ff00' } }).png().toBuffer());
     const path = write('foto.png', png);
     const ctx: SendContext = { identity, client: server.client, profile: 'p' };
 
@@ -949,7 +1022,7 @@ describe('send', () => {
     // receipts written before the field existed still match.
     expect(server.links[0].idempotency_key).toBe(agentSendIdempotencyKey(
       'ch1',
-      await blake3Hex(new TextEncoder().encode(' 0 salida del test')),
+      await blake3Hex(new TextEncoder().encode('\x000\x00salida del test')),
       'salida del test',
     ));
     expect(server.links[1].idempotency_key).not.toBe(server.links[0].idempotency_key);

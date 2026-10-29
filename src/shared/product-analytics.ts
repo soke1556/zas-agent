@@ -131,6 +131,7 @@ export const PRODUCT_EVENTS = [
   'direct.fallback_failed',
   'direct.fallback_aborted',
   'direct.too_big',
+  'direct.saved_to_channel',
   'agent.pair_opened',
   'agent.pair_approved',
   'agent.pair_refused',
@@ -613,6 +614,7 @@ const EVENT_PROPERTY_RULES: Record<ProductEvent, Readonly<Record<string, Rule>>>
   },
   'direct.fallback_aborted': {},
   'direct.too_big': { size_bucket: sizeBucket },
+  'direct.saved_to_channel': { from: oneOf('waiting', 'failed'), size_bucket: sizeBucket },
   'agent.pair_opened': { agent_kind: agentKind, protocol: count, replaces: bool },
   'agent.pair_approved': {
     agent_kind: agentKind,

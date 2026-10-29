@@ -8,8 +8,7 @@ import { TransferTelemetry, itemKind } from './transfer-telemetry.js';
 // from the content, the channel and the title, because a coding agent retries
 // where a person would not, and a lost response must not become a second item.
 // And a local receipt answers an immediate repeat without a request at all.
-import { promises as fsp } from 'node:fs';
-import { basename, extname } from 'node:path';
+import { extname } from 'node:path';
 import { agentSendIdempotencyKey } from './shared/agent.js';
 import { chunkStream } from './shared/chunker.js';
 import {
@@ -25,7 +24,8 @@ import { channelKeyOf, channelNameOf, grantsFor, resolveChannel } from './grants
 import {
   loadFingerprints, saveFingerprints, type Identity, type RemoteGrant, type SendReceipt,
 } from './identity.js';
-import { thumbnailFor } from './thumbnail.js';
+import { checkFilePath, UploadSource } from './upload-source.js';
+export { checkFilePath, MAX_FILE_BYTES } from './upload-source.js';
 
 export type SendPhase = 'hashing' | 'encrypting' | 'uploading' | 'finishing';
 
@@ -55,10 +55,9 @@ export interface SendResult {
   replayed: boolean;
 }
 
-/** A hard stop this side of the wire, so a mistyped path cannot spend an hour
- *  hashing a disk image. The plan limit is the server's to enforce, and it is
- *  lower than this for everyone. */
-export const MAX_FILE_BYTES = 5 * 1024 * 1024 * 1024;
+/** Plaintext held by a batch. Chunker lookahead and encryption buffers add a
+ * fixed overhead; file size only grows the small manifest entries. */
+export const UPLOAD_BATCH_BYTES = 16 * 1024 * 1024;
 
 /** How long an identical send is answered from the receipt instead of the
  *  network. Past it the request goes out and the server's idempotency key is
@@ -95,7 +94,8 @@ function batches<T>(items: T[], size: number): T[][] {
  *  fraction, a zero or a negative has to become a whole number of at least
  *  one: `batches` would otherwise never advance. */
 function sliceSize(ctx: SendContext): number {
-  return Math.max(1, Math.floor(ctx.batch ?? OPRF_PROBE_BATCH));
+  const size = ctx.batch ?? OPRF_PROBE_BATCH;
+  return Number.isFinite(size) ? Math.max(1, Math.min(OPRF_PROBE_BATCH, Math.floor(size))) : OPRF_PROBE_BATCH;
 }
 
 const MIME = new Map<string, string>(Object.entries({
@@ -130,17 +130,28 @@ export interface Placed { entry: ManifestChunk; proven?: boolean }
  *  already held the bytes. One per distinct id, not one per manifest entry. */
 interface Placement { cap: string; proven: boolean }
 
-async function mapLimit<T, R>(items: T[], limit: number, work: (item: T, index: number) => Promise<R>): Promise<R[]> {
+async function mapLimit<T, R>(items: T[], limit: number, work: (item: T, index: number, signal: AbortSignal) => Promise<R>): Promise<R[]> {
   const out = new Array<R>(items.length);
   let next = 0;
+  let failed = false;
+  let failure: unknown;
+  const controller = new AbortController();
   const runner = async (): Promise<void> => {
-    for (;;) {
+    while (!failed) {
       const index = next++;
       if (index >= items.length) return;
-      out[index] = await work(items[index], index);
+      try { out[index] = await work(items[index], index, controller.signal); }
+      catch (error) {
+        if (!failed) failure = error;
+        failed = true;
+        controller.abort();
+      }
     }
   };
+  // Drain requests already in flight before releasing a failed batch. A
+  // retry must not overlap orphaned workers still scheduling more uploads.
   await Promise.all(Array.from({ length: Math.min(limit, items.length) }, runner));
+  if (failed) throw failure;
   return out;
 }
 
@@ -208,16 +219,19 @@ const CHUNK_PUT_RETRY_DELAY_MS = 1000;
  *  wrong (a stale or malformed presigned URL); trying again would not change
  *  that, so it returns immediately and lets the caller turn it into
  *  `upload_failed`. */
-async function putWithRetry(url: string, body: Uint8Array): Promise<Response> {
+async function putWithRetry(url: string, body: Uint8Array, signal: AbortSignal): Promise<Response> {
   for (let attempt = 0; ; attempt++) {
+    signal.throwIfAborted();
     let res: Response;
     try {
       // No content type: the presigned URL was signed without one, and adding
       // a header the signature does not cover is a 403 from the object store.
       // The cast is the DOM lib's: a Uint8Array is a perfectly good body, and
       // undici takes one, but `BodyInit` under these lib settings does not say so.
-      res = await fetch(url, { method: 'PUT', body: body as unknown as BodyInit });
+      res = await fetch(url, { method: 'PUT', body: body as unknown as BodyInit,
+        signal: AbortSignal.any([signal, AbortSignal.timeout(5 * 60_000)]) });
     } catch {
+      signal.throwIfAborted();
       // Status 0: there was no answer to read a status from. The original
       // fetch error is not rethrown, because a caller that is not the
       // JobRunner would get a bare TypeError with no code at all.
@@ -238,11 +252,12 @@ async function putWithRetry(url: string, body: Uint8Array): Promise<Response> {
 const COMMIT_ATTEMPTS = 4;
 const COMMIT_RETRY_BASE_MS = 250;
 
-async function commitChunk(ctx: SendContext, blobId: string, uploadId: string): Promise<string> {
+async function commitChunk(ctx: SendContext, blobId: string, uploadId: string, signal: AbortSignal): Promise<string> {
   for (let attempt = 0; attempt < COMMIT_ATTEMPTS; attempt++) {
+    signal.throwIfAborted();
     try {
       const { cap } = await ctx.client.api<{ cap: string }>(
-        'POST', `/blobs/${blobId}/commit`, { upload_id: uploadId },
+        'POST', `/blobs/${blobId}/commit`, { upload_id: uploadId }, {}, signal,
       );
       return cap;
     } catch (err) {
@@ -254,19 +269,20 @@ async function commitChunk(ctx: SendContext, blobId: string, uploadId: string): 
   throw new ZasError('upload_failed', 409);
 }
 
-async function uploadChunk(ctx: SendContext, enc: EncryptedChunk): Promise<string> {
+async function uploadChunk(ctx: SendContext, enc: EncryptedChunk, signal: AbortSignal): Promise<string> {
   const reserved = await ctx.client.api<{ upload_id?: string; url?: string }>(
-    'POST', `/blobs/${enc.blobId}/upload-url`, { size: enc.ciphertext.length },
+    'POST', `/blobs/${enc.blobId}/upload-url`, { size: enc.ciphertext.length }, {}, signal,
   );
   if (typeof reserved.url !== 'string' || typeof reserved.upload_id !== 'string') {
     throw new ZasError('upload_failed', 0);
   }
-  const put = await putWithRetry(reserved.url, enc.ciphertext);
+  signal.throwIfAborted();
+  const put = await putWithRetry(reserved.url, enc.ciphertext, signal);
   if (!put.ok) {
     await put.body?.cancel().catch(() => undefined);
     throw new ZasError('upload_failed', put.status);
   }
-  return commitChunk(ctx, enc.blobId, reserved.upload_id);
+  return commitChunk(ctx, enc.blobId, reserved.upload_id, signal);
 }
 
 /** One proof, answered while its challenge is seconds old. The cap on
@@ -279,13 +295,14 @@ async function proveChunk(
   ctx: SendContext,
   enc: EncryptedChunk,
   challenge: ProbeChallenge,
+  signal?: AbortSignal,
 ): Promise<string | null> {
   const samples = challenge.offsets.map((o) => enc.ciphertext.slice(o, o + challenge.sample_len));
   try {
     const { cap } = await ctx.client.api<{ cap: string }>('POST', `/blobs/${enc.blobId}/prove`, {
       challenge_id: challenge.challenge_id,
       mac: bytesToHex(hmacSha256(b64ToBytes(challenge.nonce), concatBytes(...samples))),
-    });
+    }, {}, signal);
     return cap;
   } catch (err) {
     if (!(err instanceof ZasError) || err.serverCode !== 'proof_failed') throw err;
@@ -341,12 +358,12 @@ async function placeSlice(
   // not `proof_failed` and kills it. After MAX_REFUSALS_PER_SEND this send
   // stops proving and simply uploads the rest.
   let refused = budget.refusals >= MAX_REFUSALS_PER_SEND;
-  const prove = async (enc: EncryptedChunk): Promise<void> => {
+  const prove = async (enc: EncryptedChunk, _index?: number, signal?: AbortSignal): Promise<void> => {
     if (refused) {
       upload.push(enc);
       return;
     }
-    const cap = await proveChunk(ctx, enc, challenges[enc.blobId]);
+    const cap = await proveChunk(ctx, enc, challenges[enc.blobId], signal);
     if (cap === null) {
       refused = true;
       budget.refusals += 1;
@@ -358,8 +375,8 @@ async function placeSlice(
   if (provable.length > 0) await prove(provable[0]);
   await mapLimit(provable.slice(1), UPLOAD_CONCURRENCY, prove);
 
-  await mapLimit(upload, UPLOAD_CONCURRENCY, async (enc) => {
-    into.set(enc.blobId, { cap: await uploadChunk(ctx, enc), proven: false });
+  await mapLimit(upload, UPLOAD_CONCURRENCY, async (enc, _index, signal) => {
+    into.set(enc.blobId, { cap: await uploadChunk(ctx, enc, signal), proven: false });
   });
 }
 
@@ -367,7 +384,10 @@ async function placeSlice(
  *  probes a single blob immediately before proving it (send.worker.ts:254-297)
  *  and so never has to think about this; the agent batches its calls, so it
  *  places a slice fully before it asks for the next slice's challenges. */
-async function placeChunks(ctx: SendContext, encs: EncryptedChunk[]): Promise<Placed[]> {
+async function placeChunks(
+  ctx: SendContext, encs: EncryptedChunk[],
+  placements: Map<string, Placement>, budget: { refusals: number },
+): Promise<Placed[]> {
   if (encs.length === 0) return [];
   // Two identical plaintext chunks in one file have one blob id, and the
   // server issues one challenge per id and deletes it on the first attempt to
@@ -378,13 +398,11 @@ async function placeChunks(ctx: SendContext, encs: EncryptedChunk[]): Promise<Pl
   const distinct: EncryptedChunk[] = [];
   const seen = new Set<string>();
   for (const enc of encs) {
-    if (seen.has(enc.blobId)) continue;
+    if (seen.has(enc.blobId) || placements.has(enc.blobId)) continue;
     seen.add(enc.blobId);
     distinct.push(enc);
   }
 
-  const placements = new Map<string, Placement>();
-  const budget = { refusals: 0 };
   for (const slice of batches(distinct, sliceSize(ctx))) await placeSlice(ctx, slice, placements, budget);
 
   return encs.map((enc): Placed => {
@@ -452,70 +470,53 @@ async function postLink(
   return created.link_id;
 }
 
-/** The path this side of the wire, before a byte is read or a request made:
- *  a mistyped path must not spend an hour hashing a disk image. A directory,
- *  a FIFO or a character device all report size 0, so the size guard alone
- *  would never fire and a read would run to EOF — `/dev/zero` until the
- *  process dies. The path comes from a coding agent that is only semi-trusted,
- *  so it is checked rather than assumed. Any stat failure is the same answer:
- *  the caller named a path this agent cannot use. ENOENT, ENOTDIR under a
- *  regular file, EACCES on a directory it may not traverse — the errno is the
- *  caller's business, and letting it out would print a raw Node error where a
- *  sentence belongs. */
-export async function checkFilePath(path: string): Promise<void> {
-  const stat = await fsp.stat(path).catch(() => {
-    throw new ZasError('upload_failed', 400);
-  });
-  if (!stat.isFile()) throw new ZasError('upload_failed', 400);
-  if (stat.size > MAX_FILE_BYTES) throw new ZasError('file_too_big', 413);
-}
-
-/** The bytes and the file's own name. A view, not a copy: `new
- *  Uint8Array(buffer)` would hold the file twice. The stat is the cheap early
- *  exit; the file may have grown since, so the size is checked again. */
-export async function readFileChecked(path: string): Promise<{ bytes: Uint8Array; name: string }> {
-  await checkFilePath(path);
-  const file = await fsp.readFile(path);
-  if (file.byteLength > MAX_FILE_BYTES) throw new ZasError('file_too_big', 413);
-  return { bytes: new Uint8Array(file.buffer, file.byteOffset, file.byteLength), name: basename(path) };
-}
-
 /** The placement half of a send: chunk, hash, OPRF, encrypt, then probe and
  *  upload or prove. One placed entry per chunk, with the cap the server
  *  issued; the link — or the replace — is the caller's to make. */
 export async function placeFile(
   ctx: SendContext,
-  bytes: Uint8Array,
+  source: Uint8Array | AsyncIterable<Uint8Array>,
   onPhase?: (phase: SendPhase) => void,
 ): Promise<Placed[]> {
   onPhase?.('hashing');
-  const plains: Uint8Array[] = [];
-  for await (const piece of chunkStream([bytes])) plains.push(piece);
-  const hashes = await Promise.all(plains.map((p) => blake3Bytes(p)));
   const policy = await ctx.client.dedupePolicy();
-  const blinds = hashes.map((h) => blindDedupe(h, policy));
-  const evaluated: string[] = [];
-  for (const slice of batches(blinds.map((b) => bytesToB64(b.blindedElement)), sliceSize(ctx))) {
-    // In order, and concatenated in order: the i-th evaluation belongs to the
-    // i-th blind, and nothing downstream carries an index of its own. Each
-    // slice is measured against its own request rather than the total, because
-    // one short answer followed by one long one adds up correctly and pairs
-    // every hash after it with the wrong evaluation.
-    const answers = await ctx.client.oprfEvaluate(slice, policy);
-    if (answers.length !== slice.length) throw new ZasError('oprf_failed', 0);
-    for (const one of answers) evaluated.push(one);
+  const placements = new Map<string, Placement>();
+  const budget = { refusals: 0 };
+  const placed: Placed[] = [];
+  let plains: Uint8Array[] = [];
+  let byteCount = 0;
+  const flush = async () => {
+    if (plains.length === 0) return;
+    const hashes = await Promise.all(plains.map((p) => blake3Bytes(p)));
+    const blinds = hashes.map((h) => blindDedupe(h, policy));
+    const evaluated = await ctx.client.oprfEvaluate(blinds.map((b) => bytesToB64(b.blindedElement)), policy);
+    if (evaluated.length !== plains.length) throw new ZasError('oprf_failed', 0);
+    onPhase?.('encrypting');
+    let outputs: Uint8Array[];
+    try { outputs = hashes.map((hash, i) => oprfFinalize(hash, blinds[i].blind, b64ToBytes(evaluated[i]))); }
+    catch { throw new ZasError('oprf_failed', 0); }
+    const encs = await Promise.all(plains.map((plain, i) => encryptChunk(outputs[i], plain)));
+    plains = [];
+    byteCount = 0;
+    onPhase?.('uploading');
+    placed.push(...await placeChunks(ctx, encs, placements, budget));
+  };
+  // Even callers with an in-memory buffer feed small pieces to the chunker;
+  // its remainder copies must not grow with the size of the whole file.
+  const pieces = async function* () {
+    const input = source instanceof Uint8Array ? [source] : source;
+    for await (const bytes of input) {
+      for (let offset = 0; offset < bytes.length; offset += 1024 * 1024) yield bytes.subarray(offset, offset + 1024 * 1024);
+    }
+  };
+  for await (const piece of chunkStream(pieces())) {
+    if (byteCount + piece.length > UPLOAD_BATCH_BYTES || plains.length >= sliceSize(ctx)) await flush();
+    plains.push(piece);
+    byteCount += piece.length;
+    if (byteCount === UPLOAD_BATCH_BYTES || plains.length === sliceSize(ctx)) await flush();
   }
-
-  onPhase?.('encrypting');
-  let outputs: Uint8Array[];
-  try { outputs = hashes.map((hash, i) => oprfFinalize(hash, blinds[i].blind, b64ToBytes(evaluated[i]))); }
-  catch { throw new ZasError('oprf_failed', 0); }
-  const encs = await Promise.all(plains.map(
-    (plain, i) => encryptChunk(outputs[i], plain),
-  ));
-
-  onPhase?.('uploading');
-  return placeChunks(ctx, encs);
+  await flush();
+  return placed;
 }
 
 /** Drops every receipt naming a link, after that link changed: "send that
@@ -539,60 +540,65 @@ async function sendFileMeasured(
   // The path before the grant: a refusal here costs no request.
   await checkFilePath(input.path);
   const grant = await grantFor(ctx, input.channel);
-  const { bytes, name } = await readFileChecked(input.path);
-  ctx.transferTelemetry?.describe(bytes.length);
-  const title = input.title ?? name;
-  const contentHash = await sendIdentity(await blake3Hex(bytes), input.expires_in_days);
-  const key = await receiptKey(ctx, grant.channel_id, contentHash, title);
-  const stored = receiptFor(ctx, key);
-  if (stored) {
+  const source = await UploadSource.open(input.path);
+  try {
+    const { size, name } = source;
+    ctx.transferTelemetry?.describe(size);
+    const title = input.title ?? name;
+    onPhase?.('hashing');
+    const contentHash = await sendIdentity(await source.contentHash(), input.expires_in_days);
+    const key = await receiptKey(ctx, grant.channel_id, contentHash, title);
+    const stored = receiptFor(ctx, key);
+    if (stored) {
+      return {
+        link_id: stored.link_id,
+        channel_id: grant.channel_id,
+        channel_name: channelNameOf(ctx.identity, grant),
+        bytes: stored.bytes,
+        chunks: stored.chunks,
+        deduplicated: stored.deduplicated,
+        replayed: true,
+      };
+    }
+
+    const placed = await placeFile(ctx, source.bytes(), (phase) => { if (phase !== 'hashing') onPhase?.(phase); });
+
+    onPhase?.('finishing');
+    const mime = mimeFor(input.path);
+    const thumb = await source.thumbnail(mime);
+    await source.unchanged();
+    const manifest = newManifest({
+      kind: 'file',
+      name,
+      // Only when the caller chose one: absence means "show the file name", and
+      // writing the file name into `title` would make a rename look deliberate.
+      ...(input.title !== undefined ? { title: input.title } : {}),
+      mime,
+      size,
+      created_at: new Date().toISOString(),
+      ...(thumb ? { thumb_data: thumb } : {}),
+      chunks: placed.map((p) => p.entry),
+    });
+    ctx.transferTelemetry?.mark("finishing");
+    const linkId = await postLink(
+      ctx, grant, manifest, placed, agentSendIdempotencyKey(grant.channel_id, contentHash, title),
+      input.expires_in_days,
+    );
+
+    const deduplicated = placed.filter((p) => p.proven).length;
+    remember(ctx, key, {
+      link_id: linkId, bytes: size, chunks: placed.length, deduplicated, at: Date.now(),
+    });
     return {
-      link_id: stored.link_id,
+      link_id: linkId,
       channel_id: grant.channel_id,
       channel_name: channelNameOf(ctx.identity, grant),
-      bytes: stored.bytes,
-      chunks: stored.chunks,
-      deduplicated: stored.deduplicated,
-      replayed: true,
+      bytes: size,
+      chunks: placed.length,
+      deduplicated,
+      replayed: false,
     };
-  }
-
-  const placed = await placeFile(ctx, bytes, onPhase);
-
-  onPhase?.('finishing');
-  const mime = mimeFor(input.path);
-  const thumb = await thumbnailFor(bytes, mime);
-  const manifest = newManifest({
-    kind: 'file',
-    name,
-    // Only when the caller chose one: absence means "show the file name", and
-    // writing the file name into `title` would make a rename look deliberate.
-    ...(input.title !== undefined ? { title: input.title } : {}),
-    mime,
-    size: bytes.length,
-    created_at: new Date().toISOString(),
-    ...(thumb ? { thumb_data: thumb } : {}),
-    chunks: placed.map((p) => p.entry),
-  });
-  ctx.transferTelemetry?.mark("finishing");
-  const linkId = await postLink(
-    ctx, grant, manifest, placed, agentSendIdempotencyKey(grant.channel_id, contentHash, title),
-    input.expires_in_days,
-  );
-
-  const deduplicated = placed.filter((p) => p.proven).length;
-  remember(ctx, key, {
-    link_id: linkId, bytes: bytes.length, chunks: placed.length, deduplicated, at: Date.now(),
-  });
-  return {
-    link_id: linkId,
-    channel_id: grant.channel_id,
-    channel_name: channelNameOf(ctx.identity, grant),
-    bytes: bytes.length,
-    chunks: placed.length,
-    deduplicated,
-    replayed: false,
-  };
+  } finally { await source.close(); }
 }
 
 /** The first line, clipped. A note has no file name, and the whole text as a

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { ZasClient } from '../src/client.js';
+import { apiPublic, ZasClient } from '../src/client.js';
 import { ZasError } from '../src/errors.js';
 import { newKeyMaterial, defaultEndpoints, type Identity } from '../src/identity.js';
 import { verifyAgentChallenge } from '../src/shared/agent.js';
@@ -9,6 +9,44 @@ import { voprfBlind, voprfEvaluate, voprfPublicKey } from '../src/shared/voprf.j
 
 const keys = newKeyMaterial();
 const identity: Identity = { version: 1, agent_uid: 'agent_' + 'A'.repeat(22), owner_uid: 'owner-1', name: 'CC', kind: 'claude_code', host: 'box', ...keys, ...defaultEndpoints() };
+
+it('cancels an in-flight upload API request without retrying it', async () => {
+  const wire = fakeFetch([]);
+  const controller = new AbortController();
+  let started!: () => void;
+  const ready = new Promise<void>(resolve => { started = resolve; });
+  let calls = 0;
+  const client = new ZasClient(identity, { fetch: async (url, init) => {
+    if (!String(url).endsWith('/upload-url')) return wire.fetch(url, init);
+    calls++;
+    return new Promise<Response>((_resolve, reject) => {
+      init!.signal!.addEventListener('abort', () => reject(init!.signal!.reason), { once: true });
+      started();
+    });
+  } });
+  const pending = client.api('POST', '/blobs/blob/upload-url', {}, {}, controller.signal);
+  const assertion = expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+  await ready;
+  controller.abort();
+  await assertion;
+  expect(calls).toBe(1);
+});
+
+it('bounds authentication and metadata requests with timeout signals', async () => {
+  const wire = fakeFetch([]);
+  const signals: AbortSignal[] = [];
+  const client = new ZasClient(identity, { fetch: async (url, init) => {
+    expect(init?.signal).toBeInstanceOf(AbortSignal);
+    signals.push(init!.signal!);
+    return wire.fetch(url, init);
+  } });
+  const timeout = vi.spyOn(AbortSignal, 'timeout');
+  try {
+    await client.api('GET', '/agents/me');
+    expect(signals).toHaveLength(4);
+    expect(timeout.mock.calls).toEqual(Array(4).fill([30_000]));
+  } finally { timeout.mockRestore(); }
+});
 
 function fakeFetch(log: string[], opts: { evaluate401?: 'once' | 'always' } = {}) {
   let now = 1_000_000;
@@ -136,4 +174,21 @@ it('telemetry never signs in, refreshes on a refusal, or starts concurrent reque
   wire.tick(3600000);
   await client.reportTelemetry({events:[]});
   expect(log).toHaveLength(authCalls); expect(report).toHaveBeenCalledOnce();
+});
+
+
+it.each(['fetch', 'body'])('reports a timeout during %s as a network failure', async (phase) => {
+  const wire = fakeFetch([]);
+  const failingFetch: typeof fetch = async () => {
+    const error = new DOMException('Timed out', 'TimeoutError');
+    if (phase === 'fetch') throw error;
+    return new Response(new ReadableStream({ start(controller) { controller.error(error); } }));
+  };
+  await expect(apiPublic(identity.api_base, 'GET', '/test', undefined, {}, failingFetch))
+    .rejects.toMatchObject({ code: 'network' });
+  const client = new ZasClient(identity, { fetch: async (url, init) => {
+    if (String(url).endsWith('/agents/me')) return failingFetch(url, init);
+    return wire.fetch(url, init);
+  } });
+  await expect(client.api('GET', '/agents/me')).rejects.toMatchObject({ code: 'network' });
 });

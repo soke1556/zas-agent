@@ -10,17 +10,17 @@
 // sealed blob under the old id; on a replace, that plus the chunk ids the caps
 // name, exactly what a send shows it.
 import { agentSendIdempotencyKey } from './shared/agent.js';
-import { blake3Hex, bytesToB64 } from './shared/hash.js';
+import { bytesToB64 } from './shared/hash.js';
 import { newManifest, sealManifest, type Manifest } from './shared/manifest.js';
 import { ZasError } from './errors.js';
 import { channelNameOf } from './grants.js';
 import type { RemoteGrant } from './identity.js';
 import { loadItem, type LoadedItem } from './read.js';
 import {
-  checkFilePath, forgetLink, mimeFor, noteName, placeFile, readFileChecked,
+  checkFilePath, forgetLink, mimeFor, noteName, placeFile,
   type SendContext, type SendPhase, type SendResult,
 } from './send.js';
-import { thumbnailFor } from './thumbnail.js';
+import { UploadSource } from './upload-source.js';
 
 export interface EditItemInput {
   id: string;
@@ -138,65 +138,70 @@ export async function replaceFile(
   const item = await ownItem(ctx, input.channel, input.id);
   const { grant, row, manifest } = item;
   if (manifest.kind === 'text') throw new ZasError('not_a_file', 400);
-  const { bytes, name } = await readFileChecked(input.path);
-  const title = input.title ?? manifest.title;
-  const contentHash = await blake3Hex(bytes);
+  const source = await UploadSource.open(input.path);
+  try {
+    const { size, name } = source;
+    const title = input.title ?? manifest.title;
+    onPhase?.('hashing');
+    const contentHash = await source.contentHash();
 
-  const placed = await placeFile(ctx, bytes, onPhase);
+    const placed = await placeFile(ctx, source.bytes(), (phase) => { if (phase !== 'hashing') onPhase?.(phase); });
 
-  onPhase?.('finishing');
-  const mime = mimeFor(input.path);
-  const thumb = await thumbnailFor(bytes, mime);
-  const next = newManifest({
-    kind: 'file',
-    name,
-    ...(title !== undefined ? { title } : {}),
-    mime,
-    size: bytes.length,
-    // The item's own time: a replace changes what the item holds, not when the
-    // owner got it, and the row keeps its place in the channel either way.
-    created_at: manifest.created_at || new Date().toISOString(),
-    ...(thumb ? { thumb_data: thumb } : {}),
-    chunks: placed.map((p) => p.entry),
-  });
-  // The caps in the manifest this agent read are the ones bound to the link:
-  // the only proof the server takes that this link held those chunks.
-  const release = manifest.chunks.map((c) => c.cap).filter((cap): cap is string => typeof cap === 'string');
-  const answer = await ctx.client.api<{
-    ok: boolean; caps?: Record<string, string>; update_time?: number; replayed?: boolean;
-  }>('POST', `/links/${grant.channel_id}/${row.id}/replace`, {
-    manifest_enc: sealedFor(item, next),
-    caps: placed.map((p) => p.entry.cap).filter((cap): cap is string => typeof cap === 'string'),
-    release,
-    // Scoped to the link as well as the channel: the same bytes sent as a new
-    // item are a different request from these bytes replacing this one.
-    idempotency_key: agentSendIdempotencyKey(`${grant.channel_id}/${row.id}`, contentHash, title ?? name),
-    ...guardOf(item),
-  });
+    onPhase?.('finishing');
+    const mime = mimeFor(input.path);
+    const thumb = await source.thumbnail(mime);
+    await source.unchanged();
+    const next = newManifest({
+      kind: 'file',
+      name,
+      ...(title !== undefined ? { title } : {}),
+      mime,
+      size,
+      // The item's own time: a replace changes what the item holds, not when the
+      // owner got it, and the row keeps its place in the channel either way.
+      created_at: manifest.created_at || new Date().toISOString(),
+      ...(thumb ? { thumb_data: thumb } : {}),
+      chunks: placed.map((p) => p.entry),
+    });
+    // The caps in the manifest this agent read are the ones bound to the link:
+    // the only proof the server takes that this link held those chunks.
+    const release = manifest.chunks.map((c) => c.cap).filter((cap): cap is string => typeof cap === 'string');
+    const answer = await ctx.client.api<{
+      ok: boolean; caps?: Record<string, string>; update_time?: number; replayed?: boolean;
+    }>('POST', `/links/${grant.channel_id}/${row.id}/replace`, {
+      manifest_enc: sealedFor(item, next),
+      caps: placed.map((p) => p.entry.cap).filter((cap): cap is string => typeof cap === 'string'),
+      release,
+      // Scoped to the link as well as the channel: the same bytes sent as a new
+      // item are a different request from these bytes replacing this one.
+      idempotency_key: agentSendIdempotencyKey(`${grant.channel_id}/${row.id}`, contentHash, title ?? name),
+      ...guardOf(item),
+    });
 
-  // The bound caps go in exactly as after a send — and without `edit`, so the
-  // owner's log holds one `replace` row and not a `replace` and an `edit`.
-  // `next.chunks` are the same objects as `placed[i].entry`.
-  const bound = answer.caps ?? {};
-  let patched = false;
-  for (const p of placed) {
-    const cap = bound[p.entry.blob_id];
-    if (cap) {
-      p.entry.cap = cap;
-      patched = true;
+    // The bound caps go in exactly as after a send — and without `edit`, so the
+    // owner's log holds one `replace` row and not a `replace` and an `edit`.
+    // `next.chunks` are the same objects as `placed[i].entry`.
+    const bound = answer.caps ?? {};
+    let patched = false;
+    for (const p of placed) {
+      const cap = bound[p.entry.blob_id];
+      if (cap) {
+        p.entry.cap = cap;
+        patched = true;
+      }
     }
-  }
-  if (patched) {
-    await ctx.client.api('PATCH', `/links/${grant.channel_id}/${row.id}`, { manifest_enc: sealedFor(item, next) });
-  }
-  forgetLink(ctx.profile, row.id);
-  return {
-    link_id: row.id,
-    channel_id: grant.channel_id,
-    channel_name: channelNameOf(ctx.identity, grant),
-    bytes: bytes.length,
-    chunks: placed.length,
-    deduplicated: placed.filter((p) => p.proven).length,
-    replayed: answer.replayed === true,
-  };
+    if (patched) {
+      await ctx.client.api('PATCH', `/links/${grant.channel_id}/${row.id}`, { manifest_enc: sealedFor(item, next) });
+    }
+    forgetLink(ctx.profile, row.id);
+    return {
+      link_id: row.id,
+      channel_id: grant.channel_id,
+      channel_name: channelNameOf(ctx.identity, grant),
+      bytes: size,
+      chunks: placed.length,
+      deduplicated: placed.filter((p) => p.proven).length,
+      replayed: answer.replayed === true,
+    };
+  } finally { await source.close(); }
 }

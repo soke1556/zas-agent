@@ -347,6 +347,18 @@ describe('replaceFile', () => {
     expect(server.replaces[0].body.idempotency_key).not.toBe('');
   });
 
+  it('keeps the old item when the replacement file changes during upload', async () => {
+    const server = fakeServer({ docs: [linkDoc('L1', file())] });
+    const path = write('changing.bin', 'original');
+    vi.stubGlobal('fetch', async () => {
+      writeFileSync(path, 'changed bytes');
+      return new Response(null, { status: 200 });
+    });
+    await expect(replaceFile(ctxOf(server.client), { id: 'L1', path }))
+      .rejects.toMatchObject({ code: 'file_changed' });
+    expect(server.replaces).toHaveLength(0);
+  });
+
   it('refuses a note, somebody else’s file, and a path it cannot use, before any upload', async () => {
     const onNote = fakeServer({ docs: [linkDoc('L1', note('hola'))] });
     vi.stubGlobal('fetch', onNote.fetchImpl);

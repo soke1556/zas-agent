@@ -1,6 +1,6 @@
 {
   "repository": "soke1556/zas.web",
-  "commit": "46d727a870c64728b42b768950d55d7d7a575181",
+  "commit": "d2bcf02e158c080313023870f07ea8f6f4e0c455",
   "files": {
     "src/shared/agent-snippets.ts": "502fc3dcb24c3fe51cc45391940f75aec3763654",
     "src/shared/agent.ts": "24464ab8f8b63b764e4b8b9ea7f88150e6c42676",
@@ -17,7 +17,7 @@
     "src/shared/manifest.ts": "90445315b539d6a81e3de5e1606badfdec6e15e8",
     "src/shared/mle.ts": "4b63a77522af39557cbb891982666b414c5af4aa",
     "src/shared/oprf.ts": "9e471ca7adc12923dd01d7e1d758146ca1f34014",
-    "src/shared/product-analytics.ts": "1c9aa47f8ea50485cfda8629409849ac1fbd8d90",
+    "src/shared/product-analytics.ts": "5dcc3f2fcfb6103e0f5b971f23198a3fda90548f",
     "src/shared/sharedchannel.ts": "f222735389bab6e5b5a4ad6658cb95fbc6708587",
     "src/shared/voprf.ts": "e04c6818e9ba462fdb004baa171d445dec9aa869",
     "test/fixtures/filename-v1.json": "878c22325f77c4599d1c0aeb3edc4d883d29c44d",
